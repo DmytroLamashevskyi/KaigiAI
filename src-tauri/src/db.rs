@@ -266,6 +266,20 @@ impl Db {
         Ok(())
     }
 
+    /// Record an on-disk audio clip for a message (used when `saveAudio` is on).
+    pub async fn add_audio_clip(&self, message_id: &str, path: &str, duration_ms: i64) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO audio_clip (message_id, path, duration_ms) VALUES (?, ?, ?) \
+             ON CONFLICT(message_id) DO UPDATE SET path = excluded.path, duration_ms = excluded.duration_ms",
+        )
+        .bind(message_id)
+        .bind(path)
+        .bind(duration_ms)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// The app settings blob as JSON (empty object if never saved).
     pub async fn get_app_settings(&self) -> Result<serde_json::Value, sqlx::Error> {
         let raw = self.get_setting(SETTINGS_KEY).await?;

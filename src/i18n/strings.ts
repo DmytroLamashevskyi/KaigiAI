@@ -3,6 +3,11 @@
 // reviewed by native speakers before release.
 
 const en = {
+  "summary.button": "Summary",
+  "summary.title": "Conversation summary",
+  "summary.loading": "Generating summary…",
+  "summary.copy": "Copy",
+  "summary.failed": "Couldn't generate the summary.",
   "nav.newDialog": "New dialog",
   "nav.noDialogs": "No dialogs yet",
   "nav.settings": "Settings",
@@ -69,6 +74,11 @@ export type TKey = keyof typeof en;
 type Dict = Record<TKey, string>;
 
 const ru: Dict = {
+  "summary.button": "Конспект",
+  "summary.title": "Конспект диалога",
+  "summary.loading": "Создаю конспект…",
+  "summary.copy": "Копировать",
+  "summary.failed": "Не удалось создать конспект.",
   "nav.newDialog": "Новый диалог",
   "nav.noDialogs": "Пока нет диалогов",
   "nav.settings": "Настройки",
@@ -132,6 +142,11 @@ const ru: Dict = {
 };
 
 const ja: Dict = {
+  "summary.button": "要約",
+  "summary.title": "会話の要約",
+  "summary.loading": "要約を作成中…",
+  "summary.copy": "コピー",
+  "summary.failed": "要約を作成できませんでした。",
   "nav.newDialog": "新しい会話",
   "nav.noDialogs": "会話はまだありません",
   "nav.settings": "設定",
@@ -173,7 +188,7 @@ const ja: Dict = {
   "settings.localServersHint":
     "ローカルモードは whisper.cpp と llama.cpp のサーバーをあなたのPCで実行します。インストールして、下の欄に実行ファイルとモデルのパスを指定してください。",
   "settings.localNote":
-    "モデルは初回利用時に公式ソースからダウンロードされ、ローカルに保存されます。データは端末から外に出ません。",
+    "すべて端末上で実行され、音声がコンピューターの外に出ることはありません。アプリがサーバーを自動的に起動・停止します。",
   "settings.apiQuickSetup": "クイック設定 — プロバイダーを選択:",
   "settings.getKey": "キーを取得 →",
   "settings.baseUrl": "ベース URL",
@@ -195,6 +210,11 @@ const ja: Dict = {
 };
 
 const zh: Dict = {
+  "summary.button": "摘要",
+  "summary.title": "对话摘要",
+  "summary.loading": "正在生成摘要…",
+  "summary.copy": "复制",
+  "summary.failed": "无法生成摘要。",
   "nav.newDialog": "新建对话",
   "nav.noDialogs": "暂无对话",
   "nav.settings": "设置",
@@ -236,7 +256,7 @@ const zh: Dict = {
   "settings.localServersHint":
     "本地模式在你的电脑上运行 whisper.cpp 和 llama.cpp 服务器。请先安装它们，然后在下方填写可执行文件和模型的路径。",
   "settings.localNote":
-    "模型在首次使用时从官方来源下载并保存在本地。数据不会离开设备。",
+    "一切都在本地设备上运行——音频绝不会离开您的电脑。应用会自动启动和停止服务器。",
   "settings.apiQuickSetup": "快速设置 — 选择提供方:",
   "settings.getKey": "获取密钥 →",
   "settings.baseUrl": "Base URL",
@@ -258,6 +278,11 @@ const zh: Dict = {
 };
 
 const es: Dict = {
+  "summary.button": "Resumen",
+  "summary.title": "Resumen de la conversación",
+  "summary.loading": "Generando resumen…",
+  "summary.copy": "Copiar",
+  "summary.failed": "No se pudo generar el resumen.",
   "nav.newDialog": "Nuevo diálogo",
   "nav.noDialogs": "Aún no hay diálogos",
   "nav.settings": "Ajustes",
@@ -299,7 +324,7 @@ const es: Dict = {
   "settings.localServersHint":
     "El modo local ejecuta los servidores whisper.cpp y llama.cpp en tu equipo. Instálalos y luego indica abajo las rutas a los ejecutables y modelos.",
   "settings.localNote":
-    "Los modelos se descargan en el primer uso desde la fuente oficial y se guardan localmente. Los datos no salen del dispositivo.",
+    "Todo se ejecuta en el dispositivo: el audio nunca sale de tu computadora. La aplicación inicia y detiene los servidores automáticamente.",
   "settings.apiQuickSetup": "Configuración rápida — elige un proveedor:",
   "settings.getKey": "Obtener clave →",
   "settings.baseUrl": "URL base",
@@ -321,6 +346,11 @@ const es: Dict = {
 };
 
 const fr: Dict = {
+  "summary.button": "Résumé",
+  "summary.title": "Résumé de la conversation",
+  "summary.loading": "Génération du résumé…",
+  "summary.copy": "Copier",
+  "summary.failed": "Impossible de générer le résumé.",
   "nav.newDialog": "Nouveau dialogue",
   "nav.noDialogs": "Aucun dialogue pour l'instant",
   "nav.settings": "Paramètres",
@@ -362,7 +392,7 @@ const fr: Dict = {
   "settings.localServersHint":
     "Le mode local exécute les serveurs whisper.cpp et llama.cpp sur votre machine. Installez-les, puis indiquez ci-dessous les chemins des exécutables et des modèles.",
   "settings.localNote":
-    "Les modèles sont téléchargés lors de la première utilisation depuis la source officielle et stockés localement. Les données ne quittent pas l'appareil.",
+    "Tout s'exécute sur l'appareil — l'audio ne quitte jamais votre ordinateur. L'application démarre et arrête les serveurs automatiquement.",
   "settings.apiQuickSetup": "Configuration rapide — choisissez un fournisseur :",
   "settings.getKey": "Obtenir une clé →",
   "settings.baseUrl": "URL de base",
@@ -384,6 +414,11 @@ const fr: Dict = {
 };
 
 const de: Dict = {
+  "summary.button": "Zusammenfassung",
+  "summary.title": "Gesprächszusammenfassung",
+  "summary.loading": "Zusammenfassung wird erstellt…",
+  "summary.copy": "Kopieren",
+  "summary.failed": "Zusammenfassung konnte nicht erstellt werden.",
   "nav.newDialog": "Neuer Dialog",
   "nav.noDialogs": "Noch keine Dialoge",
   "nav.settings": "Einstellungen",
@@ -425,7 +460,7 @@ const de: Dict = {
   "settings.localServersHint":
     "Der lokale Modus führt die whisper.cpp- und llama.cpp-Server auf Ihrem Rechner aus. Installieren Sie sie und geben Sie unten die Pfade zu den Programmen und Modellen an.",
   "settings.localNote":
-    "Modelle werden bei der ersten Nutzung von der offiziellen Quelle heruntergeladen und lokal gespeichert. Daten verlassen das Gerät nicht.",
+    "Alles läuft auf dem Gerät – Audio verlässt Ihren Computer nie. Die App startet und stoppt die Server automatisch.",
   "settings.apiQuickSetup": "Schnelleinrichtung — Anbieter wählen:",
   "settings.getKey": "Schlüssel erhalten →",
   "settings.baseUrl": "Basis-URL",
@@ -447,6 +482,11 @@ const de: Dict = {
 };
 
 const it: Dict = {
+  "summary.button": "Riepilogo",
+  "summary.title": "Riepilogo della conversazione",
+  "summary.loading": "Generazione del riepilogo…",
+  "summary.copy": "Copia",
+  "summary.failed": "Impossibile generare il riepilogo.",
   "nav.newDialog": "Nuovo dialogo",
   "nav.noDialogs": "Ancora nessun dialogo",
   "nav.settings": "Impostazioni",
@@ -488,7 +528,7 @@ const it: Dict = {
   "settings.localServersHint":
     "La modalità locale esegue i server whisper.cpp e llama.cpp sul tuo computer. Installali e indica sotto i percorsi degli eseguibili e dei modelli.",
   "settings.localNote":
-    "I modelli vengono scaricati al primo utilizzo dalla fonte ufficiale e archiviati localmente. I dati non lasciano il dispositivo.",
+    "Tutto viene eseguito sul dispositivo: l'audio non lascia mai il tuo computer. L'app avvia e arresta i server automaticamente.",
   "settings.apiQuickSetup": "Configurazione rapida — scegli un provider:",
   "settings.getKey": "Ottieni chiave →",
   "settings.baseUrl": "URL base",
@@ -510,6 +550,11 @@ const it: Dict = {
 };
 
 const pt: Dict = {
+  "summary.button": "Resumo",
+  "summary.title": "Resumo da conversa",
+  "summary.loading": "Gerando resumo…",
+  "summary.copy": "Copiar",
+  "summary.failed": "Não foi possível gerar o resumo.",
   "nav.newDialog": "Novo diálogo",
   "nav.noDialogs": "Ainda não há diálogos",
   "nav.settings": "Configurações",
@@ -551,7 +596,7 @@ const pt: Dict = {
   "settings.localServersHint":
     "O modo local executa os servidores whisper.cpp e llama.cpp no seu computador. Instale-os e informe abaixo os caminhos dos executáveis e modelos.",
   "settings.localNote":
-    "Os modelos são baixados no primeiro uso da fonte oficial e armazenados localmente. Os dados não saem do dispositivo.",
+    "Tudo é executado no dispositivo — o áudio nunca sai do seu computador. O app inicia e encerra os servidores automaticamente.",
   "settings.apiQuickSetup": "Configuração rápida — escolha um provedor:",
   "settings.getKey": "Obter chave →",
   "settings.baseUrl": "URL base",
@@ -573,6 +618,11 @@ const pt: Dict = {
 };
 
 const ko: Dict = {
+  "summary.button": "요약",
+  "summary.title": "대화 요약",
+  "summary.loading": "요약 생성 중…",
+  "summary.copy": "복사",
+  "summary.failed": "요약을 생성하지 못했습니다.",
   "nav.newDialog": "새 대화",
   "nav.noDialogs": "아직 대화가 없습니다",
   "nav.settings": "설정",
@@ -614,7 +664,7 @@ const ko: Dict = {
   "settings.localServersHint":
     "로컬 모드는 whisper.cpp와 llama.cpp 서버를 사용자의 PC에서 실행합니다. 설치한 뒤 아래에 실행 파일과 모델 경로를 지정하세요.",
   "settings.localNote":
-    "모델은 처음 사용할 때 공식 소스에서 다운로드되어 로컬에 저장됩니다. 데이터는 기기를 벗어나지 않습니다.",
+    "모든 처리가 기기에서 이루어지며 오디오가 컴퓨터를 벗어나지 않습니다. 앱이 서버를 자동으로 시작하고 종료합니다.",
   "settings.apiQuickSetup": "빠른 설정 — 공급자를 선택하세요:",
   "settings.getKey": "키 받기 →",
   "settings.baseUrl": "기본 URL",
@@ -636,6 +686,11 @@ const ko: Dict = {
 };
 
 const uk: Dict = {
+  "summary.button": "Конспект",
+  "summary.title": "Конспект розмови",
+  "summary.loading": "Створюю конспект…",
+  "summary.copy": "Копіювати",
+  "summary.failed": "Не вдалося створити конспект.",
   "nav.newDialog": "Новий діалог",
   "nav.noDialogs": "Поки немає діалогів",
   "nav.settings": "Налаштування",
@@ -677,7 +732,7 @@ const uk: Dict = {
   "settings.localServersHint":
     "Локальний режим запускає сервери whisper.cpp і llama.cpp на вашому ПК. Установіть їх і вкажіть нижче шляхи до виконуваних файлів і моделей.",
   "settings.localNote":
-    "Моделі завантажуються під час першого використання з офіційного джерела та зберігаються локально. Дані не залишають пристрій.",
+    "Усе працює на пристрої — аудіо не залишає ваш комп'ютер. Застосунок сам запускає й зупиняє сервери.",
   "settings.apiQuickSetup": "Швидке налаштування — виберіть провайдера:",
   "settings.getKey": "Отримати ключ →",
   "settings.baseUrl": "Base URL",
@@ -699,6 +754,11 @@ const uk: Dict = {
 };
 
 const pl: Dict = {
+  "summary.button": "Podsumowanie",
+  "summary.title": "Podsumowanie rozmowy",
+  "summary.loading": "Generowanie podsumowania…",
+  "summary.copy": "Kopiuj",
+  "summary.failed": "Nie udało się wygenerować podsumowania.",
   "nav.newDialog": "Nowy dialog",
   "nav.noDialogs": "Brak dialogów",
   "nav.settings": "Ustawienia",
@@ -740,7 +800,7 @@ const pl: Dict = {
   "settings.localServersHint":
     "Tryb lokalny uruchamia serwery whisper.cpp i llama.cpp na Twoim komputerze. Zainstaluj je, a następnie podaj poniżej ścieżki do plików wykonywalnych i modeli.",
   "settings.localNote":
-    "Modele są pobierane przy pierwszym użyciu z oficjalnego źródła i przechowywane lokalnie. Dane nie opuszczają urządzenia.",
+    "Wszystko działa na urządzeniu — dźwięk nigdy nie opuszcza Twojego komputera. Aplikacja automatycznie uruchamia i zatrzymuje serwery.",
   "settings.apiQuickSetup": "Szybka konfiguracja — wybierz dostawcę:",
   "settings.getKey": "Uzyskaj klucz →",
   "settings.baseUrl": "Bazowy URL",
@@ -762,6 +822,11 @@ const pl: Dict = {
 };
 
 const tr: Dict = {
+  "summary.button": "Özet",
+  "summary.title": "Konuşma özeti",
+  "summary.loading": "Özet oluşturuluyor…",
+  "summary.copy": "Kopyala",
+  "summary.failed": "Özet oluşturulamadı.",
   "nav.newDialog": "Yeni diyalog",
   "nav.noDialogs": "Henüz diyalog yok",
   "nav.settings": "Ayarlar",
@@ -803,7 +868,7 @@ const tr: Dict = {
   "settings.localServersHint":
     "Yerel mod, whisper.cpp ve llama.cpp sunucularını bilgisayarınızda çalıştırır. Bunları kurun ve aşağıda yürütülebilir dosya ile model yollarını belirtin.",
   "settings.localNote":
-    "Modeller ilk kullanımda resmi kaynaktan indirilir ve yerel olarak saklanır. Veriler cihazdan çıkmaz.",
+    "Her şey cihazda çalışır — ses bilgisayarınızdan asla çıkmaz. Uygulama sunucuları otomatik olarak başlatır ve durdurur.",
   "settings.apiQuickSetup": "Hızlı kurulum — bir sağlayıcı seçin:",
   "settings.getKey": "Anahtar al →",
   "settings.baseUrl": "Temel URL",
@@ -825,6 +890,11 @@ const tr: Dict = {
 };
 
 const ar: Dict = {
+  "summary.button": "ملخّص",
+  "summary.title": "ملخّص المحادثة",
+  "summary.loading": "جارٍ إنشاء الملخّص…",
+  "summary.copy": "نسخ",
+  "summary.failed": "تعذّر إنشاء الملخّص.",
   "nav.newDialog": "حوار جديد",
   "nav.noDialogs": "لا توجد حوارات بعد",
   "nav.settings": "الإعدادات",
@@ -866,7 +936,7 @@ const ar: Dict = {
   "settings.localServersHint":
     "يشغّل الوضع المحلي خادمي whisper.cpp و llama.cpp على جهازك. ثبّتهما ثم حدّد أدناه مسارات الملفات التنفيذية والنماذج.",
   "settings.localNote":
-    "يتم تنزيل النماذج عند أول استخدام من المصدر الرسمي وتُخزَّن محليًا. لا تغادر البيانات الجهاز.",
+    "كل شيء يعمل على جهازك — لا يغادر الصوت حاسوبك أبدًا. يقوم التطبيق بتشغيل الخوادم وإيقافها تلقائيًا.",
   "settings.apiQuickSetup": "إعداد سريع — اختر مزوّدًا:",
   "settings.getKey": "الحصول على مفتاح →",
   "settings.baseUrl": "عنوان URL الأساسي",

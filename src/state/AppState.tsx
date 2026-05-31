@@ -53,6 +53,10 @@ interface AppContextValue {
   newConversation: () => void;
   openSettings: () => void;
   closeSettings: () => void;
+  summaryOpen: boolean;
+  openSummary: () => void;
+  closeSummary: () => void;
+  summarize: () => Promise<string>;
   updateSettings: (patch: Partial<Settings>) => void;
   setConversationLangs: (langA: string, langB: string) => void;
   swapLanguages: () => void;
@@ -77,6 +81,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [summaryOpen, setSummaryOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -209,6 +214,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       },
       openSettings: () => setView("settings"),
       closeSettings: () => setView("transcript"),
+      summaryOpen,
+      openSummary: () => setSummaryOpen(true),
+      closeSummary: () => setSummaryOpen(false),
+      summarize: () => {
+        if (!activeId) return Promise.resolve("");
+        return backend.summarize(activeId, settings.appLanguage);
+      },
       updateSettings: (patch) => {
         const next = { ...settings, ...patch };
         setSettings(next);
@@ -337,7 +349,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         URL.revokeObjectURL(url);
       },
     };
-  }, [backend, conversations, messages, activeId, view, settings, recording, error]);
+  }, [backend, conversations, messages, activeId, view, settings, recording, error, summaryOpen]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

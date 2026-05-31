@@ -25,6 +25,17 @@ fn set_str(settings: &mut serde_json::Value, key: &str, val: String) {
     }
 }
 
+/// Re-populate `apiKey` from the OS keychain. The key is stripped before the
+/// settings blob is persisted (see [`save_settings`]), so any settings read
+/// from the DB carries an empty `apiKey`; this restores it just before a
+/// provider is built. Without it `provider::is_api` would never select the API
+/// provider and the app would silently fall back to the mock.
+fn inject_api_key(settings: &mut serde_json::Value) {
+    if let Some(key) = crate::keychain::get_api_key() {
+        set_str(settings, "apiKey", key);
+    }
+}
+
 #[tauri::command]
 pub async fn bootstrap(db: State<'_, Db>) -> CmdResult<Bootstrap> {
     db.bootstrap().await.map_err(err)
@@ -61,7 +72,19 @@ pub async fn add_message(db: State<'_, Db>, message: Message) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub async fn save_settings(db: State<'_, Db>, settings: serde_json::Value) -> CmdResult<()> {
+pub async fn save_settings(db: State<'_, Db>, mut settings: serde_json::Value) -> CmdResult<()> {
+    // Move the API key into the OS keychain and never persist it in plaintext.
+    // An empty/absent key leaves the stored secret untouched (the UI sends an
+    // empty field after reload, which must not wipe a previously saved key).
+    let api_key = settings
+        .get("apiKey")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if !api_key.is_empty() {
+        crate::keychain::set_api_key(&api_key);
+    }
+    set_str(&mut settings, "apiKey", String::new());
     db.save_settings(&settings).await.map_err(err)
 }
 
@@ -74,12 +97,13 @@ pub async fn translate_text(
     to: String,
 ) -> CmdResult<String> {
     let mut settings = db.get_app_settings().await.map_err(err)?;
+    inject_api_key(&mut settings);
     if is_local(&settings) {
         let url = sidecars.ensure_llama(&settings)?;
         set_str(&mut settings, "localLlmBaseUrl", url);
     }
     provider::translation_from_settings(&settings)
-        .translate(&text, &from, &to)
+        .translate(&text, &from, &to, "")
         .await
 }
 
@@ -103,6 +127,7 @@ pub async fn summarize_conversation(
         .collect::<Vec<_>>()
         .join("\n\n");
     let mut settings = db.get_app_settings().await.map_err(err)?;
+    inject_api_key(&mut settings);
     if is_local(&settings) {
         let url = sidecars.ensure_llama(&settings)?;
         set_str(&mut settings, "localLlmBaseUrl", url);
@@ -126,6 +151,7 @@ pub async fn start_recording(
         .map_err(err)?
         .ok_or_else(|| "conversation not found".to_string())?;
     let mut settings = db.get_app_settings().await.map_err(err)?;
+    inject_api_key(&mut settings);
     if is_local(&settings) {
         let stt = sidecars.ensure_whisper(&settings)?;
         let llm = sidecars.ensure_llama(&settings)?;

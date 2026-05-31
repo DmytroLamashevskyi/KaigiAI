@@ -28,3 +28,6 @@ async-trait = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "default-tls"] }
 cpal = "0.15"
 tokio = { version = "1", default-features = false, features = ["sync"] }
+# OS-native secret storage for the API key (Windows Credential Manager).
+# Add `apple-native` / `sync-secret-service` features for macOS / Linux builds.
+keyring = { version = "3", features = ["windows-native"] }

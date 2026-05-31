@@ -25,7 +25,7 @@ impl SttProvider for MockProvider {
 
 #[async_trait]
 impl TranslationProvider for MockProvider {
-    async fn translate(&self, text: &str, _from: &str, to: &str) -> ProviderResult<String> {
+    async fn translate(&self, text: &str, _from: &str, to: &str, _context: &str) -> ProviderResult<String> {
         Ok(format!("[{}] {}", to.to_uppercase(), text))
     }
 

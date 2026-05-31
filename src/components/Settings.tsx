@@ -1,36 +1,71 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { useApp } from "../state/AppState";
+import { getBackend } from "../backend";
 import { LANGUAGES } from "../data/languages";
 import { API_PROVIDERS, LOCAL_DOWNLOADS, type DownloadLink } from "../data/models";
 import type { FontSize } from "../types";
 import { useT } from "../i18n/useT";
 
+interface AudioInput {
+  value: string;
+  label: string;
+}
+
+// On desktop the dropdown must list cpal device *names* — that is what the Rust
+// capture pipeline looks up (audio/capture.rs `pick_input_device`). A browser
+// `deviceId` would never match. We therefore prefer the native `list_audio_devices`
+// command and only fall back to the Web API (labelled, needs mic permission) when
+// running in a plain browser (dev preview), where capture is unavailable anyway.
 function useAudioInputs() {
-  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [devices, setDevices] = useState<AudioInput[]>([]);
   useEffect(() => {
-    if (!navigator.mediaDevices?.enumerateDevices) return;
+    const backend = getBackend();
     let cancelled = false;
-    const load = () =>
+    let detachBrowser: (() => void) | undefined;
+
+    const loadBrowser = () => {
+      if (!navigator.mediaDevices?.enumerateDevices) return;
+      const enumerate = () =>
+        navigator.mediaDevices
+          .enumerateDevices()
+          .then((all) => {
+            if (cancelled) return;
+            setDevices(
+              all
+                .filter((d) => d.kind === "audioinput")
+                .map((d) => ({ value: d.deviceId, label: d.label }))
+            );
+          })
+          .catch(() => {});
+      // Labels stay blank until mic access is granted; request it once.
       navigator.mediaDevices
-        .enumerateDevices()
-        .then((all) => {
-          if (!cancelled) setDevices(all.filter((d) => d.kind === "audioinput"));
+        .getUserMedia({ audio: true })
+        .then((stream) => {
+          stream.getTracks().forEach((t) => t.stop());
+          return enumerate();
         })
-        .catch(() => {});
-    // Device labels stay blank until mic access is granted. Request it once so the
-    // dropdown shows real OS device names instead of generic "Microphone 1/2".
-    navigator.mediaDevices
-      .getUserMedia({ audio: true })
-      .then((stream) => {
-        stream.getTracks().forEach((t) => t.stop());
-        return load();
+        .catch(() => enumerate());
+      navigator.mediaDevices.addEventListener?.("devicechange", enumerate);
+      detachBrowser = () =>
+        navigator.mediaDevices.removeEventListener?.("devicechange", enumerate);
+    };
+
+    backend
+      .listAudioDevices()
+      .then((names) => {
+        if (cancelled) return;
+        if (names.length > 0) {
+          setDevices(names.map((n) => ({ value: n, label: n })));
+        } else {
+          loadBrowser();
+        }
       })
-      .catch(() => load());
-    navigator.mediaDevices.addEventListener?.("devicechange", load);
+      .catch(() => loadBrowser());
+
     return () => {
       cancelled = true;
-      navigator.mediaDevices.removeEventListener?.("devicechange", load);
+      detachBrowser?.();
     };
   }, []);
   return devices;
@@ -321,7 +356,7 @@ export default function Settings() {
               >
                 <option value="">{t("settings.defaultDevice")}</option>
                 {audioInputs.map((d, i) => (
-                  <option key={d.deviceId || i} value={d.deviceId}>
+                  <option key={d.value || i} value={d.value}>
                     {d.label || `${t("settings.sourceMic")} ${i + 1}`}
                   </option>
                 ))}

@@ -86,12 +86,18 @@ impl ApiProvider {
 
 #[async_trait]
 impl TranslationProvider for ApiProvider {
-    async fn translate(&self, text: &str, from: &str, to: &str) -> ProviderResult<String> {
-        let system = format!(
+    async fn translate(&self, text: &str, from: &str, to: &str, context: &str) -> ProviderResult<String> {
+        let mut system = format!(
             "You are a professional translator. Translate the user's message from \
              language '{from}' to language '{to}'. Preserve meaning, tone and register. \
              Output ONLY the translation, with no quotes, labels or explanations."
         );
+        if !context.is_empty() {
+            system.push_str(&format!(
+                "\n\nRecent conversation so far, for consistency of terminology, names \
+                 and pronouns. Do NOT translate or repeat it; use it only as context:\n{context}"
+            ));
+        }
         self.chat(&system, text).await
     }
 
@@ -113,7 +119,7 @@ impl SttProvider for ApiProvider {
         sample_rate: u32,
         hint_langs: &[String],
     ) -> ProviderResult<Transcript> {
-        let wav = encode_wav_pcm16(pcm, sample_rate);
+        let wav = crate::audio::encode_wav_pcm16(pcm, sample_rate);
         let part = reqwest::multipart::Part::bytes(wav)
             .file_name("audio.wav")
             .mime_str("audio/wav")
@@ -186,31 +192,4 @@ fn normalize_lang(raw: &str, hint_langs: &[String]) -> String {
         .find(|h| h.as_str() == code)
         .cloned()
         .unwrap_or_else(|| code.to_string())
-}
-
-/// Minimal 16-bit PCM mono WAV encoder (f32 in -1.0..=1.0).
-fn encode_wav_pcm16(pcm: &[f32], sample_rate: u32) -> Vec<u8> {
-    let bytes_per_sample = 2u32;
-    let data_len = pcm.len() as u32 * bytes_per_sample;
-    let byte_rate = sample_rate * bytes_per_sample;
-    let mut buf = Vec::with_capacity(44 + data_len as usize);
-
-    buf.extend_from_slice(b"RIFF");
-    buf.extend_from_slice(&(36 + data_len).to_le_bytes());
-    buf.extend_from_slice(b"WAVE");
-    buf.extend_from_slice(b"fmt ");
-    buf.extend_from_slice(&16u32.to_le_bytes()); // PCM fmt chunk size
-    buf.extend_from_slice(&1u16.to_le_bytes()); // audio format = PCM
-    buf.extend_from_slice(&1u16.to_le_bytes()); // channels = mono
-    buf.extend_from_slice(&sample_rate.to_le_bytes());
-    buf.extend_from_slice(&byte_rate.to_le_bytes());
-    buf.extend_from_slice(&(bytes_per_sample as u16).to_le_bytes()); // block align
-    buf.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
-    buf.extend_from_slice(b"data");
-    buf.extend_from_slice(&data_len.to_le_bytes());
-    for &s in pcm {
-        let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-        buf.extend_from_slice(&v.to_le_bytes());
-    }
-    buf
 }

@@ -12,6 +12,7 @@
 //! duplicate symbols fail to link. See docs/PROJECT.md §10.3.
 
 pub mod api;
+pub mod diarize;
 pub mod mock;
 
 use async_trait::async_trait;
@@ -41,7 +42,16 @@ pub trait SttProvider: Send + Sync {
 
 #[async_trait]
 pub trait TranslationProvider: Send + Sync {
-    async fn translate(&self, text: &str, from: &str, to: &str) -> ProviderResult<String>;
+    /// Translate `text` from `from` to `to`. `context` is recent conversation
+    /// text (may be empty) used only to keep terminology, names and pronouns
+    /// consistent across turns — it must not be translated or echoed.
+    async fn translate(
+        &self,
+        text: &str,
+        from: &str,
+        to: &str,
+        context: &str,
+    ) -> ProviderResult<String>;
     async fn summarize(&self, transcript: &str, lang: &str) -> ProviderResult<String>;
 }
 

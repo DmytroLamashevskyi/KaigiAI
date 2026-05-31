@@ -11,9 +11,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::audio::{AudioCapture, AudioSource, VadConfig, SAMPLE_RATE};
@@ -67,8 +67,25 @@ impl Recorder {
             None
         };
 
-        // Worker -> async processor: one PCM segment per utterance.
-        let (seg_tx, mut seg_rx) = unbounded_channel::<Vec<f32>>();
+        // When `saveAudio` is on, each utterance's PCM is written as a WAV under
+        // <app_data>/audio and linked to its message via the audio_clip table.
+        let save_audio = settings
+            .get("saveAudio")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let audio_dir = if save_audio {
+            app.path().app_data_dir().ok().map(|d| d.join("audio"))
+        } else {
+            None
+        };
+        if let Some(dir) = &audio_dir {
+            let _ = std::fs::create_dir_all(dir);
+        }
+
+        // Worker -> async processor: one PCM segment per utterance, tagged with
+        // its end offset (ms since session start) so transcript rows carry a real
+        // timeline instead of zeros.
+        let (seg_tx, mut seg_rx) = unbounded_channel::<(Vec<f32>, i64)>();
 
         // STT + translation pipeline runs on the async runtime.
         let stt = provider::stt_from_settings(&settings);
@@ -76,7 +93,9 @@ impl Recorder {
         let hint = vec![lang_a.clone(), lang_b.clone()];
         let err_app = app.clone();
         tauri::async_runtime::spawn(async move {
-            while let Some(pcm) = seg_rx.recv().await {
+            while let Some((pcm, end_ms)) = seg_rx.recv().await {
+                let dur_ms = (pcm.len() as f64 / SAMPLE_RATE as f64 * 1000.0) as i64;
+                let start_ms = (end_ms - dur_ms).max(0);
                 let transcript = match stt.transcribe(&pcm, SAMPLE_RATE, &hint).await {
                     Ok(t) => t,
                     Err(e) => {
@@ -94,7 +113,8 @@ impl Recorder {
                 } else {
                     (lang_a.clone(), lang_b.clone())
                 };
-                let translated = match translator.translate(&transcript.text, &from, &to).await {
+                let context = recent_context(&db, &conv_id).await;
+                let translated = match translator.translate(&transcript.text, &from, &to, &context).await {
                     Ok(t) => t,
                     Err(e) => {
                         log::error!("translation failed: {e}");
@@ -111,12 +131,27 @@ impl Recorder {
                     speaker: None,
                     original_text: transcript.text,
                     translated_text: translated,
-                    start_ms: 0,
-                    end_ms: 0,
+                    start_ms,
+                    end_ms,
                     created_at: now,
                 };
                 if let Err(e) = db.add_message(&msg).await {
                     log::error!("persist message failed: {e}");
+                }
+                if let Some(dir) = &audio_dir {
+                    let path = dir.join(format!("{}.wav", msg.id));
+                    let wav = crate::audio::encode_wav_pcm16(&pcm, SAMPLE_RATE);
+                    match std::fs::write(&path, wav) {
+                        Ok(()) => {
+                            if let Err(e) = db
+                                .add_audio_clip(&msg.id, &path.to_string_lossy(), dur_ms)
+                                .await
+                            {
+                                log::error!("persist audio clip failed: {e}");
+                            }
+                        }
+                        Err(e) => log::error!("write audio clip failed: {e}"),
+                    }
                 }
                 if let Err(e) = app.emit("transcript-message", &msg) {
                     log::error!("emit failed: {e}");
@@ -128,9 +163,14 @@ impl Recorder {
         let (stop_tx, stop_rx) = channel::<()>();
         let (ready_tx, ready_rx) = channel::<Result<(), String>>();
         std::thread::spawn(move || {
+            // Marks t=0 of the recording; each segment is stamped with the wall
+            // clock elapsed when VAD hands it over (its end), so rows get a real
+            // timeline even though VAD drops the silence between utterances.
+            let session_start = Instant::now();
             let capture =
                 AudioCapture::start(source, device.as_deref(), VadConfig::default(), move |seg| {
-                    let _ = seg_tx.send(seg);
+                    let end_ms = session_start.elapsed().as_millis() as i64;
+                    let _ = seg_tx.send((seg, end_ms));
                 });
             match capture {
                 Ok(cap) => {
@@ -159,6 +199,29 @@ impl Recorder {
         let mut guard = self.stop.lock().unwrap();
         *guard = None;
     }
+}
+
+/// Recent conversation text (last few turns) handed to the translator so it can
+/// keep terminology, names and pronouns consistent across utterances. Empty on
+/// any DB error or for a fresh conversation.
+async fn recent_context(db: &Db, conv_id: &str) -> String {
+    const MAX_TURNS: usize = 6;
+    let msgs = match db.list_messages(conv_id).await {
+        Ok(m) => m,
+        Err(_) => return String::new(),
+    };
+    let start = msgs.len().saturating_sub(MAX_TURNS);
+    msgs[start..]
+        .iter()
+        .map(|m| {
+            if m.translated_text.is_empty() {
+                m.original_text.clone()
+            } else {
+                format!("{} | {}", m.original_text, m.translated_text)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Push a non-fatal error to the UI (best-effort; failures to emit are ignored).

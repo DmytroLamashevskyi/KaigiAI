@@ -1,6 +1,7 @@
 mod audio;
 mod commands;
 mod db;
+mod keychain;
 mod provider;
 mod recording;
 mod sidecar;

@@ -3,6 +3,7 @@ import { AppProvider, useApp } from "./state/AppState";
 import Sidebar from "./components/Sidebar";
 import TranscriptView from "./components/TranscriptView";
 import Settings from "./components/Settings";
+import SummaryModal from "./components/SummaryModal";
 import PresentBroadcaster from "./present/PresentBroadcaster";
 import "./styles/app.css";
 
@@ -42,6 +43,7 @@ export default function App() {
         <MainArea />
       </div>
       <ErrorToast />
+      <SummaryModal />
       <PresentBroadcaster />
     </AppProvider>
   );
