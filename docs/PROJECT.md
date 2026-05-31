@@ -409,7 +409,7 @@ Cloudflare Workers AI, OpenRouter `:free`. Self-hosted LibreTranslate — офл
 фолбэком), делает health-check перед записью и глушит их при выходе. Аудио и текст
 никуда не уходят с устройства.
 
-### 10.6 Диаризация спикеров (этап 3, дизайн)
+### 10.6 Диаризация спикеров (реализовано)
 
 Язык ≠ говорящий: два человека на одном языке по A/B-маршрутизации не различимы.
 Помечаем каждый VAD-сегмент меткой спикера. Границы реплик уже даёт VAD —
@@ -436,6 +436,10 @@ Cloudflare Workers AI, OpenRouter `:free`. Self-hosted LibreTranslate — офл
 - **Интеграция.** `provider/diarize.rs` (trait `Diarizer` + `NullDiarizer` / `OnnxDiarizer`);
   вызов в пайплайне записи после STT, до перевода; диаризатор создаётся per-session в
   `Recorder::start`. UI: инлайн-редактор имени по клику на бейдж спикера.
+- **Статус.** Реализовано и собрано. Крейт `ort` 2.0.0-rc.9 линкуется в процессе под
+  Windows/MSVC (фолбэк-сайдкар не понадобился). Протестированная модель —
+  `wespeaker_en_voxceleb_resnet34_LM.onnx` (~25 МБ). Путь задаётся в Settings; пустой
+  путь → диаризация выключена.
 
 ---
 
@@ -462,8 +466,8 @@ Cloudflare Workers AI, OpenRouter `:free`. Self-hosted LibreTranslate — офл
 
 **Этап 3.**
 - Полировка realtime (sliding window, латентность).
-- Диаризация спикеров (опц.) — ONNX embedding через `ort`, метки `Speaker N` с
-  персистентным переименованием на беседу. См. §10.6.
+- ✅ Диаризация спикеров (опц.) — ONNX embedding через `ort`, метки `Speaker N` с
+  персистентным переименованием на беседу. Реализовано, см. §10.6.
 - PDF-экспорт, ручные заметки.
 - Сборка под Apple Silicon (Metal).
 

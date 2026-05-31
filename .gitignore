@@ -24,11 +24,24 @@ models/
 *.db
 *.wav
 
+# Secrets — never commit API keys or env files (keys live in the OS keychain)
+.env
+.env.*
+!.env.example
+
+# Tauri updater / code-signing private keys
+.tauri/
+*.key
+*.p12
+*.keystore
+
 # Editor / OS / tooling
 .vscode/*
 !.vscode/extensions.json
 .idea/
 .claude/
 .DS_Store
+Thumbs.db
+desktop.ini
 *.local
 *.log
