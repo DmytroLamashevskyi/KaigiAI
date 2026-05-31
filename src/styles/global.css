@@ -1,0 +1,115 @@
+/* KaigiAI design tokens + base — aesthetic close to Claude Desktop:
+   warm neutral surfaces, subtle borders, clean sans-serif, generous spacing. */
+
+:root {
+  /* Light theme (default) */
+  --bg-app: #f5f4ef;
+  --bg-sidebar: #ece9e2;
+  --bg-surface: #ffffff;
+  --bg-surface-2: #faf9f6;
+  --bg-hover: #e7e3da;
+  --bg-active: #ddd8cc;
+
+  --text-primary: #1f1e1c;
+  --text-secondary: #6b6a66;
+  --text-muted: #9a9892;
+
+  --border: #e0ddd4;
+  --border-strong: #cfcabd;
+
+  --accent: #c96442;        /* Claude's warm clay accent */
+  --accent-hover: #b5573a;
+  --accent-soft: #f3e6df;
+
+  --lang-a: #2f6f8f;        /* panel A tint */
+  --lang-b: #8f5a2f;        /* panel B tint */
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+
+  --sidebar-w: 260px;
+}
+
+:root[data-theme="dark"] {
+  --bg-app: #1f1e1c;
+  --bg-sidebar: #181715;
+  --bg-surface: #262522;
+  --bg-surface-2: #2d2c28;
+  --bg-hover: #322f2a;
+  --bg-active: #3c3833;
+
+  --text-primary: #ece9e2;
+  --text-secondary: #a8a59d;
+  --text-muted: #6f6c65;
+
+  --border: #34322d;
+  --border-strong: #443f38;
+
+  --accent: #d97a57;
+  --accent-hover: #e08a6a;
+  --accent-soft: #3a2c25;
+
+  --lang-a: #6fb3d2;
+  --lang-b: #d2a06f;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg-app);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+  background-clip: content-box;
+}

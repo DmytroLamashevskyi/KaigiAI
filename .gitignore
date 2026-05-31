@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+
+# TypeScript incremental build cache + tsc-emitted config
+# (source of truth is vite.config.ts; the .js/.d.ts are generated)
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+
+# Rust / Tauri (added in Phase B)
+target/
+src-tauri/target/
+
+# Local models (downloaded at runtime, never committed)
+models/
+
+# Recorded audio (saveAudio setting) and local SQLite data
+*.sqlite
+*.sqlite-*
+*.db
+*.wav
+
+# Editor / OS / tooling
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.claude/
+.DS_Store
+*.local
+*.log
