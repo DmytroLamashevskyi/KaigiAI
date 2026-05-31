@@ -371,6 +371,19 @@ export default function Settings() {
               <span className="switch-knob" />
             </button>
           </Field>
+          <Field
+            label={t("settings.diarizationModel")}
+            hint={t("settings.diarizationModelHint")}
+          >
+            <input
+              className="settings-input"
+              value={settings.diarizationModelPath}
+              placeholder="C:\\models\\voxceleb_resnet34.onnx"
+              onChange={(e) =>
+                updateSettings({ diarizationModelPath: e.target.value })
+              }
+            />
+          </Field>
         </Section>
       </div>
     </div>

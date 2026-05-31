@@ -31,3 +31,9 @@ tokio = { version = "1", default-features = false, features = ["sync"] }
 # OS-native secret storage for the API key (Windows Credential Manager).
 # Add `apple-native` / `sync-secret-service` features for macOS / Linux builds.
 keyring = { version = "3", features = ["windows-native"] }
+# ONNX Runtime for on-device speaker-embedding diarization (docs/PROJECT.md §10.6).
+# `download-binaries` fetches the prebuilt onnxruntime native lib at build time.
+ort = { version = "=2.0.0-rc.9", default-features = false, features = ["download-binaries", "ndarray"] }
+# Pin ort-sys to match: rc.10+ build scripts add a mandatory TLS feature that
+# ort rc.9 doesn't forward, breaking `download-binaries`.
+ort-sys = { version = "=2.0.0-rc.9" }

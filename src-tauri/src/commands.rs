@@ -62,6 +62,11 @@ pub async fn set_conversation_langs(db: State<'_, Db>, id: String, lang_a: Strin
 }
 
 #[tauri::command]
+pub async fn set_speaker_names(db: State<'_, Db>, id: String, names_json: String, updated_at: i64) -> CmdResult<()> {
+    db.set_speaker_names(&id, &names_json, updated_at).await.map_err(err)
+}
+
+#[tauri::command]
 pub async fn delete_conversation(db: State<'_, Db>, id: String) -> CmdResult<()> {
     db.delete_conversation(&id).await.map_err(err)
 }

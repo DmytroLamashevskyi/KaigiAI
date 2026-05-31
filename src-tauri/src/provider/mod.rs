@@ -111,3 +111,20 @@ pub fn stt_from_settings(settings: &serde_json::Value) -> Box<dyn SttProvider> {
         Box::new(mock::MockProvider)
     }
 }
+
+/// Build the per-session diarizer. Returns [`diarize::NullDiarizer`] (speaker =
+/// None) unless `diarizationModelPath` points to a loadable ONNX embedding
+/// model. See docs/PROJECT.md §10.6.
+pub fn diarizer_from_settings(settings: &serde_json::Value) -> Box<dyn diarize::Diarizer> {
+    let path = settings
+        .get("diarizationModelPath")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if !path.is_empty() {
+        match diarize::OnnxDiarizer::new(path, crate::audio::SAMPLE_RATE) {
+            Ok(d) => return Box::new(d),
+            Err(e) => log::error!("diarization disabled: {e}"),
+        }
+    }
+    Box::new(diarize::NullDiarizer)
+}

@@ -407,16 +407,34 @@
 .speaker-badge {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
   margin-right: 6px;
-  border-radius: 50%;
+  padding: 1px 8px;
+  border: none;
+  border-radius: 9px;
   background: var(--accent-soft);
   color: var(--accent);
   font-size: 11px;
   font-weight: 650;
+  line-height: 1.5;
   vertical-align: middle;
+  cursor: pointer;
+}
+.speaker-badge:hover {
+  filter: brightness(0.96);
+}
+
+.speaker-edit {
+  margin-right: 6px;
+  padding: 1px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.5;
+  vertical-align: middle;
+  width: 9ch;
 }
 
 .row-time {

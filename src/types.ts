@@ -26,8 +26,28 @@ export interface Conversation {
   title: string;
   langA: LanguageCode;
   langB: LanguageCode;
+  speakerNames?: string | null; // JSON map of diarization label -> display name
   createdAt: number;
   updatedAt: number;
+}
+
+/** Parsed `speakerNames` JSON (label -> display name); empty on absent/invalid. */
+export function speakerMap(conv: Conversation): Record<string, string> {
+  if (!conv.speakerNames) return {};
+  try {
+    return JSON.parse(conv.speakerNames) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+/** Resolve a diarization label to its user-given name, or the label itself. */
+export function displaySpeaker(
+  conv: Conversation,
+  label?: string | null
+): string | null {
+  if (!label) return null;
+  return speakerMap(conv)[label] ?? label;
 }
 
 export type ProviderMode = "local" | "api";
@@ -47,6 +67,7 @@ export interface Settings {
   localLlmServerPath: string; // path to llama.cpp server executable (local mode)
   localWhisperPath: string; // GGML/GGUF whisper model (local mode)
   localLlmPath: string; // GGUF instruct model (local mode)
+  diarizationModelPath: string; // ONNX speaker-embedding model; empty = diarization off
   nGpuLayers: number; // layers offloaded to GPU; 0 = CPU-only
   audioDevice: string; // empty = system default
   audioSource: AudioSource;

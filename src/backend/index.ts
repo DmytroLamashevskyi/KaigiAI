@@ -22,6 +22,7 @@ export interface Backend {
     langB: string,
     updatedAt: number
   ): Promise<void>;
+  setSpeakerNames(id: string, namesJson: string, updatedAt: number): Promise<void>;
   deleteConversation(id: string): Promise<void>;
   addMessage(m: Message): Promise<void>;
   saveSettings(s: Settings): Promise<void>;
@@ -49,6 +50,8 @@ function tauriBackend(): Backend {
       invoke<void>("rename_conversation", { id, title, updatedAt }),
     setConversationLangs: (id, langA, langB, updatedAt) =>
       invoke<void>("set_conversation_langs", { id, langA, langB, updatedAt }),
+    setSpeakerNames: (id, namesJson, updatedAt) =>
+      invoke<void>("set_speaker_names", { id, namesJson, updatedAt }),
     deleteConversation: (id) => invoke<void>("delete_conversation", { id }),
     addMessage: (message) => invoke<void>("add_message", { message }),
     saveSettings: (settings) => invoke<void>("save_settings", { settings }),
@@ -132,6 +135,14 @@ function localBackend(): Backend {
         if (c) {
           c.langA = langA;
           c.langB = langB;
+          c.updatedAt = updatedAt;
+        }
+      }),
+    setSpeakerNames: (id, namesJson, updatedAt) =>
+      mutate((s) => {
+        const c = s.conversations.find((x) => x.id === id);
+        if (c) {
+          c.speakerNames = namesJson;
           c.updatedAt = updatedAt;
         }
       }),

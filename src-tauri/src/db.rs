@@ -19,6 +19,9 @@ pub struct Conversation {
     pub title: String,
     pub lang_a: String,
     pub lang_b: String,
+    /// JSON map of diarization label -> display name (e.g. {"Speaker 1":"Масаки"}).
+    /// NULL until the user renames a speaker. See docs/PROJECT.md §10.6.
+    pub speaker_names: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -55,6 +58,7 @@ CREATE TABLE IF NOT EXISTS conversation (
   title       TEXT NOT NULL,
   lang_a      TEXT NOT NULL,
   lang_b      TEXT NOT NULL,
+  speaker_names TEXT,
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL
 );
@@ -127,6 +131,12 @@ impl Db {
 
     async fn init_schema(&self) -> Result<(), sqlx::Error> {
         sqlx::raw_sql(SCHEMA).execute(&self.pool).await?;
+        // Migration for DBs created before the column existed. `CREATE TABLE IF
+        // NOT EXISTS` won't add columns, so add it idempotently and ignore the
+        // "duplicate column" error on already-migrated databases.
+        let _ = sqlx::query("ALTER TABLE conversation ADD COLUMN speaker_names TEXT")
+            .execute(&self.pool)
+            .await;
         Ok(())
     }
 
@@ -147,7 +157,7 @@ impl Db {
 
     pub async fn list_conversations(&self) -> Result<Vec<Conversation>, sqlx::Error> {
         sqlx::query_as::<_, Conversation>(
-            "SELECT id, title, lang_a, lang_b, created_at, updated_at \
+            "SELECT id, title, lang_a, lang_b, speaker_names, created_at, updated_at \
              FROM conversation ORDER BY updated_at DESC",
         )
         .fetch_all(&self.pool)
@@ -156,7 +166,7 @@ impl Db {
 
     pub async fn get_conversation(&self, id: &str) -> Result<Option<Conversation>, sqlx::Error> {
         sqlx::query_as::<_, Conversation>(
-            "SELECT id, title, lang_a, lang_b, created_at, updated_at \
+            "SELECT id, title, lang_a, lang_b, speaker_names, created_at, updated_at \
              FROM conversation WHERE id = ?",
         )
         .bind(id)
@@ -215,6 +225,17 @@ impl Db {
         sqlx::query("UPDATE conversation SET lang_a = ?, lang_b = ?, updated_at = ? WHERE id = ?")
             .bind(lang_a)
             .bind(lang_b)
+            .bind(updated_at)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Persist the diarization label -> display-name map (JSON) for a conversation.
+    pub async fn set_speaker_names(&self, id: &str, names_json: &str, updated_at: i64) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE conversation SET speaker_names = ?, updated_at = ? WHERE id = ?")
+            .bind(names_json)
             .bind(updated_at)
             .bind(id)
             .execute(&self.pool)
@@ -320,6 +341,7 @@ mod tests {
             title: "Untitled".into(),
             lang_a: "ru".into(),
             lang_b: "en".into(),
+            speaker_names: None,
             created_at: ts,
             updated_at: ts,
         }

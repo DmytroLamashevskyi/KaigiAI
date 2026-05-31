@@ -68,6 +68,9 @@ const en = {
   "settings.defaultDevice": "System default",
   "settings.saveAudio": "Save dialog recording",
   "settings.saveAudioHint": "Compressed recording, stored locally",
+  "settings.diarizationModel": "Speaker diarization model",
+  "settings.diarizationModelHint":
+    "Path to an ONNX speaker-embedding model. Leave empty to disable.",
 };
 
 export type TKey = keyof typeof en;
@@ -139,6 +142,9 @@ const ru: Dict = {
   "settings.defaultDevice": "Системное по умолчанию",
   "settings.saveAudio": "Сохранять запись диалога",
   "settings.saveAudioHint": "Сжатая запись, хранится локально",
+  "settings.diarizationModel": "Модель диаризации спикеров",
+  "settings.diarizationModelHint":
+    "Путь к ONNX-модели эмбеддинга голоса. Пусто — выключено.",
 };
 
 const ja: Dict = {
@@ -207,6 +213,9 @@ const ja: Dict = {
   "settings.defaultDevice": "システム既定",
   "settings.saveAudio": "会話の録音を保存",
   "settings.saveAudioHint": "圧縮録音、ローカルに保存",
+  "settings.diarizationModel": "話者ダイアライゼーションモデル",
+  "settings.diarizationModelHint":
+    "ONNX 話者埋め込みモデルへのパス。空欄で無効。",
 };
 
 const zh: Dict = {
@@ -275,6 +284,8 @@ const zh: Dict = {
   "settings.defaultDevice": "系统默认",
   "settings.saveAudio": "保存对话录音",
   "settings.saveAudioHint": "压缩录音，保存在本地",
+  "settings.diarizationModel": "说话人分离模型",
+  "settings.diarizationModelHint": "ONNX 说话人嵌入模型的路径。留空则禁用。",
 };
 
 const es: Dict = {
@@ -343,6 +354,9 @@ const es: Dict = {
   "settings.defaultDevice": "Predeterminado del sistema",
   "settings.saveAudio": "Guardar grabación del diálogo",
   "settings.saveAudioHint": "Grabación comprimida, almacenada localmente",
+  "settings.diarizationModel": "Modelo de diarización de hablantes",
+  "settings.diarizationModelHint":
+    "Ruta a un modelo ONNX de embeddings de voz. Déjalo vacío para desactivar.",
 };
 
 const fr: Dict = {
@@ -411,6 +425,9 @@ const fr: Dict = {
   "settings.defaultDevice": "Par défaut du système",
   "settings.saveAudio": "Enregistrer l'enregistrement du dialogue",
   "settings.saveAudioHint": "Enregistrement compressé, stocké localement",
+  "settings.diarizationModel": "Modèle de diarisation des locuteurs",
+  "settings.diarizationModelHint":
+    "Chemin vers un modèle ONNX d'embedding vocal. Laissez vide pour désactiver.",
 };
 
 const de: Dict = {
@@ -479,6 +496,9 @@ const de: Dict = {
   "settings.defaultDevice": "Systemstandard",
   "settings.saveAudio": "Dialogaufnahme speichern",
   "settings.saveAudioHint": "Komprimierte Aufnahme, lokal gespeichert",
+  "settings.diarizationModel": "Sprecher-Diarisierungsmodell",
+  "settings.diarizationModelHint":
+    "Pfad zu einem ONNX-Sprecher-Embedding-Modell. Leer lassen zum Deaktivieren.",
 };
 
 const it: Dict = {
@@ -547,6 +567,9 @@ const it: Dict = {
   "settings.defaultDevice": "Predefinito di sistema",
   "settings.saveAudio": "Salva registrazione del dialogo",
   "settings.saveAudioHint": "Registrazione compressa, archiviata localmente",
+  "settings.diarizationModel": "Modello di diarizzazione dei parlanti",
+  "settings.diarizationModelHint":
+    "Percorso di un modello ONNX di embedding vocale. Lascia vuoto per disattivare.",
 };
 
 const pt: Dict = {
@@ -615,6 +638,9 @@ const pt: Dict = {
   "settings.defaultDevice": "Padrão do sistema",
   "settings.saveAudio": "Salvar gravação do diálogo",
   "settings.saveAudioHint": "Gravação compactada, armazenada localmente",
+  "settings.diarizationModel": "Modelo de diarização de falantes",
+  "settings.diarizationModelHint":
+    "Caminho para um modelo ONNX de embedding de voz. Deixe vazio para desativar.",
 };
 
 const ko: Dict = {
@@ -683,6 +709,9 @@ const ko: Dict = {
   "settings.defaultDevice": "시스템 기본값",
   "settings.saveAudio": "대화 녹음 저장",
   "settings.saveAudioHint": "압축 녹음, 로컬에 저장",
+  "settings.diarizationModel": "화자 분리 모델",
+  "settings.diarizationModelHint":
+    "ONNX 화자 임베딩 모델 경로. 비워 두면 비활성화됩니다.",
 };
 
 const uk: Dict = {
@@ -751,6 +780,9 @@ const uk: Dict = {
   "settings.defaultDevice": "Системний за замовчуванням",
   "settings.saveAudio": "Зберігати запис діалогу",
   "settings.saveAudioHint": "Стиснений запис, зберігається локально",
+  "settings.diarizationModel": "Модель діаризації спікерів",
+  "settings.diarizationModelHint":
+    "Шлях до ONNX-моделі ембеддингу голосу. Порожньо — вимкнено.",
 };
 
 const pl: Dict = {
@@ -819,6 +851,9 @@ const pl: Dict = {
   "settings.defaultDevice": "Domyślne systemowe",
   "settings.saveAudio": "Zapisuj nagranie dialogu",
   "settings.saveAudioHint": "Skompresowane nagranie, przechowywane lokalnie",
+  "settings.diarizationModel": "Model diaryzacji mówców",
+  "settings.diarizationModelHint":
+    "Ścieżka do modelu ONNX osadzania głosu. Pozostaw puste, aby wyłączyć.",
 };
 
 const tr: Dict = {
@@ -887,6 +922,9 @@ const tr: Dict = {
   "settings.defaultDevice": "Sistem varsayılanı",
   "settings.saveAudio": "Diyalog kaydını sakla",
   "settings.saveAudioHint": "Sıkıştırılmış kayıt, yerel olarak saklanır",
+  "settings.diarizationModel": "Konuşmacı ayrıştırma modeli",
+  "settings.diarizationModelHint":
+    "ONNX konuşmacı gömme modelinin yolu. Devre dışı bırakmak için boş bırakın.",
 };
 
 const ar: Dict = {
@@ -955,6 +993,9 @@ const ar: Dict = {
   "settings.defaultDevice": "الافتراضي للنظام",
   "settings.saveAudio": "حفظ تسجيل الحوار",
   "settings.saveAudioHint": "تسجيل مضغوط، يُخزَّن محليًا",
+  "settings.diarizationModel": "نموذج فصل المتحدثين",
+  "settings.diarizationModelHint":
+    "مسار نموذج ONNX لتضمين الصوت. اتركه فارغًا للتعطيل.",
 };
 
 export const translations: Record<string, Dict> = {

@@ -12,6 +12,7 @@ import type {
   Settings,
   View,
 } from "../types";
+import { displaySpeaker, speakerMap } from "../types";
 import { getBackend } from "../backend";
 import { languageName } from "../data/languages";
 import { isRtl } from "../i18n";
@@ -29,6 +30,7 @@ const DEFAULT_SETTINGS: Settings = {
   localLlmServerPath: "",
   localWhisperPath: "",
   localLlmPath: "",
+  diarizationModelPath: "",
   nGpuLayers: 0,
   audioDevice: "",
   audioSource: "mic",
@@ -62,6 +64,7 @@ interface AppContextValue {
   swapLanguages: () => void;
   addTextMessage: (text: string) => void;
   renameConversation: (id: string, title: string) => void;
+  renameSpeaker: (label: string, name: string) => void;
   deleteConversation: (id: string) => void;
   downloadConversation: (id: string) => void;
 }
@@ -308,6 +311,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
           console.error("renameConversation failed", e)
         );
       },
+      renameSpeaker: (label, name) => {
+        if (!activeId) return;
+        const conv = conversations.find((c) => c.id === activeId);
+        if (!conv) return;
+        const map = speakerMap(conv);
+        const trimmed = name.trim();
+        if (trimmed) map[label] = trimmed;
+        else delete map[label];
+        const json = JSON.stringify(map);
+        const ts = Date.now();
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === activeId ? { ...c, speakerNames: json, updatedAt: ts } : c
+          )
+        );
+        backend.setSpeakerNames(activeId, json, ts).catch((e) =>
+          console.error("setSpeakerNames failed", e)
+        );
+      },
       deleteConversation: (id) => {
         setConversations((prev) => prev.filter((c) => c.id !== id));
         setMessages((prev) => {
@@ -333,7 +355,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           "",
         ];
         for (const m of msgs) {
-          const who = m.speaker ? `**${m.speaker}** ` : "";
+          const name = displaySpeaker(conv, m.speaker);
+          const who = name ? `**${name}** ` : "";
           lines.push(`${who}${m.originalText}`);
           if (m.translatedText) lines.push(`> ${m.translatedText}`);
           lines.push("");

@@ -90,6 +90,8 @@ impl Recorder {
         // STT + translation pipeline runs on the async runtime.
         let stt = provider::stt_from_settings(&settings);
         let translator = provider::translation_from_settings(&settings);
+        // Per-session diarizer: labels are stable within this conversation only.
+        let mut diarizer = provider::diarizer_from_settings(&settings);
         let hint = vec![lang_a.clone(), lang_b.clone()];
         let err_app = app.clone();
         tauri::async_runtime::spawn(async move {
@@ -122,13 +124,14 @@ impl Recorder {
                         String::new()
                     }
                 };
+                let speaker = diarizer.label(&pcm, SAMPLE_RATE);
                 let now = now_ms();
                 let msg = Message {
                     id: next_id(),
                     conversation_id: conv_id.clone(),
                     source: "audio".into(),
                     detected_lang: transcript.lang,
-                    speaker: None,
+                    speaker,
                     original_text: transcript.text,
                     translated_text: translated,
                     start_ms,
