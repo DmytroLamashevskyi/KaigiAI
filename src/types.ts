@@ -16,6 +16,11 @@ export interface Message {
   speaker?: string | null; // populated once diarization exists
   originalText: string;
   translatedText: string;
+  /** Secondary translation, only set for "foreign" rows whose `detectedLang`
+   *  falls outside the conversation pair (docs/PROJECT.md §10.7, variant A):
+   *  `translatedText` holds the langA translation, this holds langB. Null/absent
+   *  for ordinary bilingual rows. */
+  translatedTextB?: string | null;
   startMs: number; // offset from recording start
   endMs: number;
   createdAt: number;

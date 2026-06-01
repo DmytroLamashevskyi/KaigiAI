@@ -23,6 +23,9 @@ export interface Backend {
     updatedAt: number
   ): Promise<void>;
   setSpeakerNames(id: string, namesJson: string, updatedAt: number): Promise<void>;
+  // Reassign a single message to a different speaker label (manual diarization
+  // fix). `label` null clears the attribution. See docs/PROJECT.md §10.9.
+  setMessageSpeaker(messageId: string, label: string | null): Promise<void>;
   deleteConversation(id: string): Promise<void>;
   addMessage(m: Message): Promise<void>;
   saveSettings(s: Settings): Promise<void>;
@@ -52,6 +55,8 @@ function tauriBackend(): Backend {
       invoke<void>("set_conversation_langs", { id, langA, langB, updatedAt }),
     setSpeakerNames: (id, namesJson, updatedAt) =>
       invoke<void>("set_speaker_names", { id, namesJson, updatedAt }),
+    setMessageSpeaker: (messageId, label) =>
+      invoke<void>("set_message_speaker", { messageId, label }),
     deleteConversation: (id) => invoke<void>("delete_conversation", { id }),
     addMessage: (message) => invoke<void>("add_message", { message }),
     saveSettings: (settings) => invoke<void>("save_settings", { settings }),
@@ -144,6 +149,16 @@ function localBackend(): Backend {
         if (c) {
           c.speakerNames = namesJson;
           c.updatedAt = updatedAt;
+        }
+      }),
+    setMessageSpeaker: (messageId, label) =>
+      mutate((s) => {
+        for (const list of Object.values(s.messages)) {
+          const m = list.find((x) => x.id === messageId);
+          if (m) {
+            m.speaker = label;
+            break;
+          }
         }
       }),
     deleteConversation: (id) =>

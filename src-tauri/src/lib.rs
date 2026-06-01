@@ -43,6 +43,7 @@ pub fn run() {
             commands::rename_conversation,
             commands::set_conversation_langs,
             commands::set_speaker_names,
+            commands::set_message_speaker,
             commands::delete_conversation,
             commands::add_message,
             commands::save_settings,

@@ -437,11 +437,102 @@
   width: 9ch;
 }
 
+.speaker-badge-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.speaker-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+
+.speaker-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 21;
+  min-width: 150px;
+  padding: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+
+.speaker-menu-label {
+  padding: 4px 8px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.speaker-menu-item {
+  display: block;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.speaker-menu-item:hover {
+  background: var(--accent-soft);
+}
+
+.speaker-menu-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border);
+}
+
 .row-time {
   font-size: 11px;
   color: var(--text-muted);
   text-align: center;
   padding-top: 12px;
+}
+
+/* Foreign-language utterance (spoken outside the conversation pair, §10.7 var.A):
+   the original spans the full width with a language badge, the two translations
+   sit underneath in the usual A | time | B grid. */
+.transcript-row.foreign {
+  display: block;
+}
+.foreign-original {
+  display: block;
+}
+.foreign-original .cell-text {
+  display: inline;
+}
+.foreign-translations {
+  display: grid;
+  grid-template-columns: 1fr 56px 1fr;
+  align-items: start;
+  gap: 0;
+  margin-top: 4px;
+}
+.lang-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
+  padding: 1px 8px;
+  border-radius: 9px;
+  background: var(--border);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.5;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
 /* Input bar (bottom) */

@@ -65,6 +65,9 @@ interface AppContextValue {
   addTextMessage: (text: string) => void;
   renameConversation: (id: string, title: string) => void;
   renameSpeaker: (label: string, name: string) => void;
+  /** Reassign a single message to a different speaker label (manual diarization
+   *  fix). `label` null clears the attribution. */
+  reassignSpeaker: (messageId: string, label: string | null) => void;
   deleteConversation: (id: string) => void;
   downloadConversation: (id: string) => void;
 }
@@ -330,6 +333,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
           console.error("setSpeakerNames failed", e)
         );
       },
+      reassignSpeaker: (messageId, label) => {
+        if (!activeId) return;
+        setMessages((prev) => {
+          const list = prev[activeId];
+          if (!list) return prev;
+          return {
+            ...prev,
+            [activeId]: list.map((m) =>
+              m.id === messageId ? { ...m, speaker: label } : m
+            ),
+          };
+        });
+        backend.setMessageSpeaker(messageId, label).catch((e) =>
+          console.error("setMessageSpeaker failed", e)
+        );
+      },
       deleteConversation: (id) => {
         setConversations((prev) => prev.filter((c) => c.id !== id));
         setMessages((prev) => {
@@ -357,8 +376,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         for (const m of msgs) {
           const name = displaySpeaker(conv, m.speaker);
           const who = name ? `**${name}** ` : "";
-          lines.push(`${who}${m.originalText}`);
+          const foreign =
+            m.detectedLang !== conv.langA && m.detectedLang !== conv.langB;
+          const tag = foreign ? `[${languageName(m.detectedLang)}] ` : "";
+          lines.push(`${who}${tag}${m.originalText}`);
           if (m.translatedText) lines.push(`> ${m.translatedText}`);
+          if (foreign && m.translatedTextB) lines.push(`> ${m.translatedTextB}`);
           lines.push("");
         }
         const blob = new Blob([lines.join("\n")], {

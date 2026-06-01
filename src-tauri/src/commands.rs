@@ -67,6 +67,11 @@ pub async fn set_speaker_names(db: State<'_, Db>, id: String, names_json: String
 }
 
 #[tauri::command]
+pub async fn set_message_speaker(db: State<'_, Db>, message_id: String, label: Option<String>) -> CmdResult<()> {
+    db.set_message_speaker(&message_id, label.as_deref()).await.map_err(err)
+}
+
+#[tauri::command]
 pub async fn delete_conversation(db: State<'_, Db>, id: String) -> CmdResult<()> {
     db.delete_conversation(&id).await.map_err(err)
 }

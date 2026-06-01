@@ -109,20 +109,41 @@ impl Recorder {
                 if transcript.text.is_empty() || is_noise(&transcript.text) {
                     continue;
                 }
-                // Route by detected language: translate into the *other* side.
-                let (from, to) = if transcript.lang == lang_b {
-                    (lang_b.clone(), lang_a.clone())
-                } else {
-                    (lang_a.clone(), lang_b.clone())
-                };
                 let context = recent_context(&db, &conv_id).await;
-                let translated = match translator.translate(&transcript.text, &from, &to, &context).await {
-                    Ok(t) => t,
-                    Err(e) => {
-                        log::error!("translation failed: {e}");
-                        emit_error(&err_app, format!("Translation failed: {e}"));
-                        String::new()
+                // Helper: translate, logging+toasting on failure (empty on error).
+                let do_translate = |from: String, to: String| {
+                    let translator = &translator;
+                    let text = &transcript.text;
+                    let context = &context;
+                    let err_app = &err_app;
+                    async move {
+                        match translator.translate(text, &from, &to, context).await {
+                            Ok(t) => t,
+                            Err(e) => {
+                                log::error!("translation failed: {e}");
+                                emit_error(err_app, format!("Translation failed: {e}"));
+                                String::new()
+                            }
+                        }
                     }
+                };
+                // Three cases (docs/PROJECT.md §10.7 variant A):
+                //  - spoke lang_a  → translate into lang_b
+                //  - spoke lang_b  → translate into lang_a
+                //  - foreign lang  → translate into BOTH; UI shows the original
+                //    full-width and a translation in each column.
+                let is_pair = transcript.lang == lang_a || transcript.lang == lang_b;
+                let (translated, translated_b) = if !is_pair {
+                    let into_a = do_translate(transcript.lang.clone(), lang_a.clone()).await;
+                    let into_b = do_translate(transcript.lang.clone(), lang_b.clone()).await;
+                    (into_a, Some(into_b))
+                } else {
+                    let (from, to) = if transcript.lang == lang_b {
+                        (lang_b.clone(), lang_a.clone())
+                    } else {
+                        (lang_a.clone(), lang_b.clone())
+                    };
+                    (do_translate(from, to).await, None)
                 };
                 let speaker = diarizer.label(&pcm, SAMPLE_RATE);
                 let now = now_ms();
@@ -134,6 +155,7 @@ impl Recorder {
                     speaker,
                     original_text: transcript.text,
                     translated_text: translated,
+                    translated_text_b: translated_b,
                     start_ms,
                     end_ms,
                     created_at: now,

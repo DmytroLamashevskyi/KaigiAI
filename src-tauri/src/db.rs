@@ -36,6 +36,12 @@ pub struct Message {
     pub speaker: Option<String>,
     pub original_text: String,
     pub translated_text: String,
+    /// Secondary translation, only set for "foreign" rows whose `detected_lang`
+    /// is outside the conversation's pair (docs/PROJECT.md §10.7, variant A):
+    /// `translated_text` holds the `lang_a` translation, this holds `lang_b`.
+    /// NULL for ordinary bilingual rows.
+    #[serde(default)]
+    pub translated_text_b: Option<String>,
     pub start_ms: i64,
     pub end_ms: i64,
     pub created_at: i64,
@@ -71,6 +77,7 @@ CREATE TABLE IF NOT EXISTS message (
   speaker         TEXT,
   original_text   TEXT NOT NULL,
   translated_text TEXT NOT NULL,
+  translated_text_b TEXT,
   start_ms        INTEGER NOT NULL,
   end_ms          INTEGER NOT NULL,
   created_at      INTEGER NOT NULL
@@ -137,6 +144,10 @@ impl Db {
         let _ = sqlx::query("ALTER TABLE conversation ADD COLUMN speaker_names TEXT")
             .execute(&self.pool)
             .await;
+        // Secondary translation for foreign-language rows (§10.7 variant A).
+        let _ = sqlx::query("ALTER TABLE message ADD COLUMN translated_text_b TEXT")
+            .execute(&self.pool)
+            .await;
         Ok(())
     }
 
@@ -177,7 +188,7 @@ impl Db {
     pub async fn list_messages(&self, conversation_id: &str) -> Result<Vec<Message>, sqlx::Error> {
         sqlx::query_as::<_, Message>(
             "SELECT id, conversation_id, source, detected_lang, speaker, \
-             original_text, translated_text, start_ms, end_ms, created_at \
+             original_text, translated_text, translated_text_b, start_ms, end_ms, created_at \
              FROM message WHERE conversation_id = ? ORDER BY created_at ASC",
         )
         .bind(conversation_id)
@@ -188,7 +199,7 @@ impl Db {
     async fn list_all_messages(&self) -> Result<Vec<Message>, sqlx::Error> {
         sqlx::query_as::<_, Message>(
             "SELECT id, conversation_id, source, detected_lang, speaker, \
-             original_text, translated_text, start_ms, end_ms, created_at \
+             original_text, translated_text, translated_text_b, start_ms, end_ms, created_at \
              FROM message ORDER BY created_at ASC",
         )
         .fetch_all(&self.pool)
@@ -243,6 +254,19 @@ impl Db {
         Ok(())
     }
 
+    /// Reassign a single message to a different speaker label (manual override
+    /// of diarization). `label` may be an existing or brand-new label; `None`
+    /// clears the attribution. Clustering state is untouched — this is purely a
+    /// post-hoc correction. See docs/PROJECT.md §10.9.
+    pub async fn set_message_speaker(&self, message_id: &str, label: Option<&str>) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE message SET speaker = ? WHERE id = ?")
+            .bind(label)
+            .bind(message_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn touch_conversation(&self, id: &str, updated_at: i64) -> Result<(), sqlx::Error> {
         sqlx::query("UPDATE conversation SET updated_at = ? WHERE id = ?")
             .bind(updated_at)
@@ -264,12 +288,13 @@ impl Db {
     pub async fn add_message(&self, m: &Message) -> Result<(), sqlx::Error> {
         sqlx::query(
             "INSERT INTO message (id, conversation_id, source, detected_lang, speaker, \
-             original_text, translated_text, start_ms, end_ms, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             original_text, translated_text, translated_text_b, start_ms, end_ms, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(id) DO UPDATE SET \
              detected_lang = excluded.detected_lang, \
              original_text = excluded.original_text, \
-             translated_text = excluded.translated_text",
+             translated_text = excluded.translated_text, \
+             translated_text_b = excluded.translated_text_b",
         )
         .bind(&m.id)
         .bind(&m.conversation_id)
@@ -278,6 +303,7 @@ impl Db {
         .bind(&m.speaker)
         .bind(&m.original_text)
         .bind(&m.translated_text)
+        .bind(&m.translated_text_b)
         .bind(m.start_ms)
         .bind(m.end_ms)
         .bind(m.created_at)
@@ -356,6 +382,7 @@ mod tests {
             speaker: None,
             original_text: "Привет".into(),
             translated_text: "Hello".into(),
+            translated_text_b: None,
             start_ms: 0,
             end_ms: 0,
             created_at: ts,
