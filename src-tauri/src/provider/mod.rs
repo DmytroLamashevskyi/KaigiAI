@@ -65,14 +65,26 @@ fn is_api(settings: &serde_json::Value) -> bool {
 
 fn api_from_settings(settings: &serde_json::Value) -> api::ApiProvider {
     let s = |k: &str| settings.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
-    api::ApiProvider::new(s("apiBaseUrl"), s("apiKey"), s("sttModel"), s("llmModel"))
+    api::ApiProvider::new(
+        s("apiBaseUrl"),
+        s("apiKey"),
+        s("sttModel"),
+        s("llmModel"),
+        "audio/transcriptions".to_string(),
+    )
 }
 
 /// Default base URLs for the on-device sidecar servers. The Tauri layer injects
 /// `localSttBaseUrl` / `localLlmBaseUrl` once it knows the actually-bound ports
-/// (see [`crate::sidecar`]); these constants are the fallback.
-pub const DEFAULT_LOCAL_STT_URL: &str = "http://127.0.0.1:8771/v1";
+/// (see [`crate::sidecar`]); these constants are the fallback. The whisper.cpp
+/// server serves transcription at `/inference` on the server root (NOT under
+/// `/v1`), so the local STT base URL has no `/v1` suffix; llama.cpp is fully
+/// OpenAI-shaped and keeps `/v1`.
+pub const DEFAULT_LOCAL_STT_URL: &str = "http://127.0.0.1:8771";
 pub const DEFAULT_LOCAL_LLM_URL: &str = "http://127.0.0.1:8770/v1";
+
+/// whisper.cpp server's native transcription route (server root, no `/v1`).
+pub const LOCAL_STT_ENDPOINT: &str = "inference";
 
 /// True when settings select on-device models (mode == "local"). The actual
 /// servers are user-installed and spawned as sidecars by the Tauri layer.
@@ -80,14 +92,16 @@ fn is_local(settings: &serde_json::Value) -> bool {
     settings.get("providerMode").and_then(|v| v.as_str()) == Some("local")
 }
 
-/// Build an ApiProvider for a local sidecar server (no API key needed).
+/// Build an ApiProvider for a local sidecar server (no API key needed). The STT
+/// path is whisper.cpp's `/inference`; translation ignores it (uses
+/// `/chat/completions`), so the same value is harmless there.
 fn local_provider(settings: &serde_json::Value, base_url_key: &str, default_url: &str) -> api::ApiProvider {
     let s = |k: &str| settings.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     let base = match settings.get(base_url_key).and_then(|v| v.as_str()) {
         Some(u) if !u.is_empty() => u.to_string(),
         _ => default_url.to_string(),
     };
-    api::ApiProvider::new(base, String::new(), s("sttModel"), s("llmModel"))
+    api::ApiProvider::new(base, String::new(), s("sttModel"), s("llmModel"), LOCAL_STT_ENDPOINT.to_string())
 }
 
 /// Select the translation/summary provider for the given settings blob.

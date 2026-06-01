@@ -66,7 +66,8 @@ impl Sidecars {
         let mut guard = self.inner.lock().unwrap();
         if let Some(r) = guard.whisper.as_mut() {
             if r.sig == sig && r.alive() {
-                return Ok(base_url(r.port));
+                // Reuse path must match the spawn path: server root, no `/v1`.
+                return Ok(base_url_root(r.port));
             }
             r.kill();
             guard.whisper = None;
@@ -74,9 +75,10 @@ impl Sidecars {
         let port = pick_port(DEFAULT_WHISPER_PORT);
         let child = spawn(&exe, &["-m", &model, "--host", "127.0.0.1", "--port", &port.to_string()])?;
         let mut running = Running { child, sig, port };
-        wait_ready(&mut running)?;
+        wait_ready(&mut running, None)?;
         guard.whisper = Some(running);
-        Ok(base_url(port))
+        // whisper.cpp serves `/inference` at the server root, not under `/v1`.
+        Ok(base_url_root(port))
     }
 
     /// Ensure the llama server is running for the current settings; returns its
@@ -111,7 +113,8 @@ impl Sidecars {
             ],
         )?;
         let mut running = Running { child, sig, port };
-        wait_ready(&mut running)?;
+        // llama.cpp binds before the model loads — gate on /health (200 = ready).
+        wait_ready(&mut running, Some("/health"))?;
         guard.llama = Some(running);
         Ok(base_url(port))
     }
@@ -138,6 +141,11 @@ fn base_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}/v1")
 }
 
+/// Server-root base URL (no `/v1`). whisper.cpp's transcription route lives here.
+fn base_url_root(port: u16) -> String {
+    format!("http://127.0.0.1:{port}")
+}
+
 fn spawn(exe: &str, args: &[&str]) -> Result<Child, String> {
     let mut cmd = Command::new(exe);
     cmd.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
@@ -150,21 +158,29 @@ fn spawn(exe: &str, args: &[&str]) -> Result<Child, String> {
     cmd.spawn().map_err(|e| format!("failed to start '{exe}': {e}"))
 }
 
-/// Block until the server is accepting TCP connections, or it dies / times out.
-fn wait_ready(r: &mut Running) -> Result<(), String> {
-    let addr = format!("127.0.0.1:{}", r.port);
+/// Block until the server is ready, or it dies / times out.
+///
+/// TCP-accept alone is not enough for llama.cpp: it binds the port *before* the
+/// model finishes loading into VRAM, so an early request races ahead and gets
+/// `503 {"error":{"message":"Loading model"}}`. When `health_path` is set we
+/// additionally poll that HTTP route until it returns `200` (llama's `/health`
+/// returns `503` while loading, `200` when ready). whisper.cpp loads its model
+/// before binding, so TCP-accept is sufficient there (`health_path = None`).
+fn wait_ready(r: &mut Running, health_path: Option<&str>) -> Result<(), String> {
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{}", r.port)
+        .parse()
+        .map_err(|e| format!("bad addr: {e}"))?;
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     loop {
         if let Ok(Some(status)) = r.child.try_wait() {
             return Err(format!("server exited during startup ({status})"));
         }
-        if TcpStream::connect_timeout(
-            &addr.parse().map_err(|e| format!("bad addr: {e}"))?,
-            Duration::from_millis(500),
-        )
-        .is_ok()
-        {
-            return Ok(());
+        if TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok() {
+            match health_path {
+                None => return Ok(()),
+                Some(path) if http_status(&addr, path) == Some(200) => return Ok(()),
+                Some(_) => {} // listening but model still loading — keep waiting
+            }
         }
         if Instant::now() >= deadline {
             r.kill();
@@ -172,6 +188,22 @@ fn wait_ready(r: &mut Running) -> Result<(), String> {
         }
         std::thread::sleep(Duration::from_millis(300));
     }
+}
+
+/// Minimal blocking HTTP/1.0 GET; returns the response status code, if any.
+/// Used only for the local readiness probe, so no body parsing is needed.
+fn http_status(addr: &std::net::SocketAddr, path: &str) -> Option<u16> {
+    use std::io::{Read, Write};
+    let mut stream = TcpStream::connect_timeout(addr, Duration::from_millis(500)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+    stream.set_write_timeout(Some(Duration::from_secs(2))).ok()?;
+    let req = format!("GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    stream.write_all(req.as_bytes()).ok()?;
+    let mut buf = [0u8; 256];
+    let n = stream.read(&mut buf).ok()?;
+    // Status line looks like: "HTTP/1.1 200 OK"
+    let head = String::from_utf8_lossy(&buf[..n]);
+    head.lines().next()?.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// Use the preferred port if free, otherwise grab an ephemeral one.

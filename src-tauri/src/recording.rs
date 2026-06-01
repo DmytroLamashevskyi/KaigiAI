@@ -106,7 +106,7 @@ impl Recorder {
                         continue;
                     }
                 };
-                if transcript.text.is_empty() {
+                if transcript.text.is_empty() || is_noise(&transcript.text) {
                     continue;
                 }
                 // Route by detected language: translate into the *other* side.
@@ -225,6 +225,25 @@ async fn recent_context(db: &Db, conv_id: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Whisper emits non-speech placeholders such as `[BLANK_AUDIO]`, `[Music]`,
+/// `[Japanese]` or `(speaking foreign language)` for segments it can't actually
+/// transcribe (silence, noise, or speech in an unexpected language). These are
+/// markers, not utterances — routing one into the transcript shows garbage on
+/// the wrong side, so we drop any segment whose text is entirely one bracketed
+/// or parenthesised token.
+fn is_noise(text: &str) -> bool {
+    let t = text.trim();
+    if t.len() < 2 {
+        return false;
+    }
+    let bracketed = (t.starts_with('[') && t.ends_with(']'))
+        || (t.starts_with('(') && t.ends_with(')'))
+        || (t.starts_with('*') && t.ends_with('*'));
+    // Only a marker if there's a single token (no inner closer then more text),
+    // e.g. "[Music]" but not "[John] said hi".
+    bracketed && !t[1..t.len() - 1].contains(|c| matches!(c, '[' | ']' | '(' | ')'))
 }
 
 /// Push a non-fatal error to the UI (best-effort; failures to emit are ignored).

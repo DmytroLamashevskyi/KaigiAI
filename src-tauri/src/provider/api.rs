@@ -1,6 +1,12 @@
 //! OpenAI-compatible provider: works against Groq, Gemini (OpenAI shim),
 //! Ollama/LM Studio, or any corporate/self-hosted endpoint exposing
 //! `/chat/completions` and `/audio/transcriptions`.
+//!
+//! The transcription path is configurable (`stt_endpoint`) because the local
+//! whisper.cpp server is NOT fully OpenAI-shaped: it serves transcription at
+//! `/inference` (at the server root, not under `/v1`) rather than
+//! `/v1/audio/transcriptions`. Its JSON response (`text` + `language`) already
+//! matches what we parse, so only the route differs.
 
 use async_trait::async_trait;
 use reqwest::Client;
@@ -14,6 +20,9 @@ pub struct ApiProvider {
     api_key: String,
     stt_model: String,
     llm_model: String,
+    /// Transcription route appended to `base_url`. OpenAI/cloud:
+    /// `"audio/transcriptions"`; local whisper.cpp server: `"inference"`.
+    stt_endpoint: String,
 }
 
 #[derive(Deserialize)]
@@ -37,13 +46,20 @@ struct TranscriptionResponse {
 }
 
 impl ApiProvider {
-    pub fn new(base_url: String, api_key: String, stt_model: String, llm_model: String) -> Self {
+    pub fn new(
+        base_url: String,
+        api_key: String,
+        stt_model: String,
+        llm_model: String,
+        stt_endpoint: String,
+    ) -> Self {
         Self {
             client: Client::new(),
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
             stt_model,
             llm_model,
+            stt_endpoint: stt_endpoint.trim_matches('/').to_string(),
         }
     }
 
@@ -124,14 +140,25 @@ impl SttProvider for ApiProvider {
             .file_name("audio.wav")
             .mime_str("audio/wav")
             .map_err(|e| e.to_string())?;
-        let form = reqwest::multipart::Form::new()
+        let mut form = reqwest::multipart::Form::new()
             .text("model", self.stt_model.clone())
             .text("response_format", "verbose_json")
             .part("file", part);
+        // whisper.cpp's server defaults `language` to "en" when the field is
+        // absent, which FORCES an English decode on every segment: Russian and
+        // Japanese speech then comes back as (mis)translated English and the
+        // detected language is always "en", so A/B routing collapses to one
+        // side. Sending "auto" restores real language auto-detection. We only
+        // do this for the local whisper.cpp route ("inference"); the cloud
+        // OpenAI endpoint auto-detects when the field is omitted and rejects
+        // the literal "auto".
+        if self.stt_endpoint == "inference" {
+            form = form.text("language", "auto");
+        }
 
         let mut req = self
             .client
-            .post(format!("{}/audio/transcriptions", self.base_url))
+            .post(format!("{}/{}", self.base_url, self.stt_endpoint))
             .multipart(form);
         if !self.api_key.is_empty() {
             req = req.bearer_auth(&self.api_key);

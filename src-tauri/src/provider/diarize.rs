@@ -45,35 +45,37 @@ const HOP: usize = 160;
 fn hz_to_mel(hz: f32) -> f32 {
     1127.0 * (1.0 + hz / 700.0).ln()
 }
-fn mel_to_hz(mel: f32) -> f32 {
-    700.0 * ((mel / 1127.0).exp() - 1.0)
-}
 
-/// Triangular mel filterbank: `N_MELS` filters over the `N_FFT/2 + 1` power-spectrum bins.
+/// Kaldi pre-emphasis coefficient (high-pass tilt applied before windowing).
+const PREEMPH: f32 = 0.97;
+
+/// Triangular mel filterbank: `N_MELS` filters over the `N_FFT/2 + 1`
+/// power-spectrum bins. The triangles are linear in the **mel** domain (Kaldi
+/// convention), not in Hz — interpolating the slopes in Hz (as a naive
+/// implementation does) distorts the higher filters and measurably worsens the
+/// resulting speaker embeddings.
 fn mel_filters(sample_rate: u32) -> Vec<Vec<f32>> {
     let n_bins = N_FFT / 2 + 1;
     let f_max = sample_rate as f32 / 2.0;
     let mel_min = hz_to_mel(0.0);
     let mel_max = hz_to_mel(f_max);
-    // N_MELS+2 equally spaced mel points -> band edges.
-    let points: Vec<f32> = (0..N_MELS + 2)
-        .map(|i| {
-            let mel = mel_min + (mel_max - mel_min) * i as f32 / (N_MELS as f32 + 1.0);
-            mel_to_hz(mel)
-        })
+    // N_MELS+2 equally spaced points in the mel domain → triangle edges.
+    let mel_pts: Vec<f32> = (0..N_MELS + 2)
+        .map(|i| mel_min + (mel_max - mel_min) * i as f32 / (N_MELS as f32 + 1.0))
         .collect();
-    let bin = |hz: f32| (hz * N_FFT as f32 / sample_rate as f32).floor() as usize;
+    // Mel value of each FFT bin's centre frequency.
+    let bin_mel: Vec<f32> = (0..n_bins)
+        .map(|k| hz_to_mel(k as f32 * sample_rate as f32 / N_FFT as f32))
+        .collect();
     let mut filters = vec![vec![0.0f32; n_bins]; N_MELS];
     for m in 0..N_MELS {
-        let (l, c, r) = (bin(points[m]), bin(points[m + 1]), bin(points[m + 2]));
-        for k in l..c.min(n_bins) {
-            if c > l {
-                filters[m][k] = (k - l) as f32 / (c - l) as f32;
-            }
-        }
-        for k in c..r.min(n_bins) {
-            if r > c {
-                filters[m][k] = (r - k) as f32 / (r - c) as f32;
+        let (lo, ce, hi) = (mel_pts[m], mel_pts[m + 1], mel_pts[m + 2]);
+        for (k, &bm) in bin_mel.iter().enumerate() {
+            let up = (bm - lo) / (ce - lo);
+            let dn = (hi - bm) / (hi - ce);
+            let w = up.min(dn);
+            if w > 0.0 {
+                filters[m][k] = w;
             }
         }
     }
@@ -146,8 +148,20 @@ fn fbank(pcm: &[f32], sample_rate: u32) -> (Vec<f32>, usize) {
         let start = f * HOP;
         re.iter_mut().for_each(|v| *v = 0.0);
         im.iter_mut().for_each(|v| *v = 0.0);
+        // Kaldi frame pipeline: remove DC offset, pre-emphasis, then window.
+        let mut mean = 0.0f32;
         for i in 0..WIN {
-            re[i] = pcm[start + i] * window[i];
+            mean += pcm[start + i];
+        }
+        mean /= WIN as f32;
+        // Pre-emphasis baseline for i=0 is the (DC-removed) first sample, so
+        // sample 0 becomes (1 - PREEMPH) * x0, matching Kaldi.
+        let mut prev = pcm[start] - mean;
+        for i in 0..WIN {
+            let x = pcm[start + i] - mean;
+            let pe = x - PREEMPH * prev;
+            prev = x;
+            re[i] = pe * window[i];
         }
         fft(&mut re, &mut im);
         for (m, filt) in filters.iter().enumerate() {
@@ -178,7 +192,13 @@ fn fbank(pcm: &[f32], sample_rate: u32) -> (Vec<f32>, usize) {
 // --- ONNX embedding diarizer ----------------------------------------------
 
 /// Cosine-similarity threshold above which a segment joins an existing speaker.
-const SIM_THRESHOLD: f32 = 0.55;
+const SIM_THRESHOLD: f32 = 0.50;
+
+/// Minimum speech duration (seconds) for an embedding we trust enough to *open a
+/// new speaker*. Short clips (a word or two) give unstable embeddings that would
+/// otherwise spawn a spurious speaker per utterance; below this we attach the
+/// segment to the nearest existing speaker instead of creating a new one.
+const MIN_NEW_SPEAKER_SECS: f32 = 0.7;
 
 pub struct OnnxDiarizer {
     session: Session,
@@ -244,17 +264,26 @@ impl Diarizer for OnnxDiarizer {
                 best = (sim, i);
             }
         }
+        let long_enough =
+            pcm.len() as f32 / self.sample_rate as f32 >= MIN_NEW_SPEAKER_SECS;
         let idx = if best.0 >= SIM_THRESHOLD {
-            // Fold the new sample into the matched centroid (running mean) and renormalize.
+            // Confident match: fold the sample into the centroid (running mean)
+            // and renormalize.
             let c = &mut self.centroids[best.1];
             for (cv, ev) in c.iter_mut().zip(&emb) {
                 *cv = 0.9 * *cv + 0.1 * ev;
             }
             l2_normalize(c);
             best.1
-        } else {
+        } else if long_enough || self.centroids.is_empty() {
+            // Below threshold but a trustworthy (long) clip, or the very first
+            // utterance: this is a genuinely new speaker.
             self.centroids.push(emb);
             self.centroids.len() - 1
+        } else {
+            // Short, low-confidence clip: don't spawn a speaker on weak evidence.
+            // Attach to the nearest existing one without polluting its centroid.
+            best.1
         };
         Some(format!("Speaker {}", idx + 1))
     }
