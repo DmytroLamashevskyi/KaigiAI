@@ -365,27 +365,24 @@ pub fn open_url(url: String) -> CmdResult<()> {
 /// Open (or focus) a standalone presentation window showing one side of the
 /// transcript large, for a second screen/projector. A browser `window.open`
 /// never creates a native window in the Tauri webview, so the ⤢ buttons route
-/// here. The window loads plain `index.html` (a query string would be taken as a
-/// literal filename → blank page); the side is derived from the window label
-/// (`present-a`/`present-b`) in the frontend. `title` is the language name for
-/// the window caption. State syncs over the Tauri event bus (src/present/transport.ts).
+/// here. The `present-a`/`present-b` windows are PRE-DEFINED in tauri.conf.json
+/// (hidden, loading present.html) because runtime-created windows didn't load
+/// the bundled assets in release — config windows use the same proven mechanism
+/// as the main window. We just title + show + focus the right one. `title` is
+/// the language name for the caption; state syncs over the Tauri event bus.
 #[tauri::command]
 pub fn open_present_window(app: AppHandle, side: String, title: String) -> CmdResult<()> {
-    use tauri::{WebviewUrl, WebviewWindowBuilder};
     if side != "A" && side != "B" {
         return Err("side must be A or B".into());
     }
     let label = format!("present-{}", side.to_lowercase());
-    if let Some(w) = app.get_webview_window(&label) {
-        let _ = w.set_focus();
-        return Ok(());
-    }
-    let caption = if title.trim().is_empty() { side.clone() } else { title };
-    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("present.html".into()))
-        .title(format!("KaigiAI — {caption}"))
-        .inner_size(900.0, 660.0)
-        .build()
-        .map_err(err)?;
+    let win = app
+        .get_webview_window(&label)
+        .ok_or_else(|| format!("present window '{label}' not found"))?;
+    let caption = if title.trim().is_empty() { side } else { title };
+    let _ = win.set_title(&format!("KaigiAI — {caption}"));
+    win.show().map_err(err)?;
+    let _ = win.set_focus();
     Ok(())
 }
 

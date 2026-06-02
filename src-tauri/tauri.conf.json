@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "KaigiAI",
         "width": 1100,
         "height": 720,
@@ -19,6 +20,24 @@
         "minHeight": 480,
         "resizable": true,
         "fullscreen": false
+      },
+      {
+        "label": "present-a",
+        "url": "present.html",
+        "title": "KaigiAI",
+        "width": 900,
+        "height": 660,
+        "resizable": true,
+        "visible": false
+      },
+      {
+        "label": "present-b",
+        "url": "present.html",
+        "title": "KaigiAI",
+        "width": 900,
+        "height": 660,
+        "resizable": true,
+        "visible": false
       }
     ],
     "security": {

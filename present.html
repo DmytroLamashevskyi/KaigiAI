@@ -6,7 +6,41 @@
     <title>KaigiAI — Present</title>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Self-diagnostic: this text shows if the HTML loaded but the module
+         script never ran. React replaces #root on mount; an uncaught error is
+         printed below instead of a blank window. -->
+    <div id="root">
+      <div style="padding:16px;font:14px system-ui,sans-serif;color:#666">
+        Загрузка окна презентации…
+      </div>
+    </div>
+    <pre
+      id="boot-error"
+      style="display:none;padding:16px;color:#b00020;white-space:pre-wrap;font:13px monospace"
+    ></pre>
+    <script>
+      window.addEventListener("error", function (e) {
+        var el = document.getElementById("boot-error");
+        if (el) {
+          el.style.display = "block";
+          el.textContent =
+            "PRESENT JS ERROR:\n" +
+            (e.message || e) +
+            "\n" +
+            (e.filename || "") +
+            ":" +
+            (e.lineno || "");
+        }
+      });
+      window.addEventListener("unhandledrejection", function (e) {
+        var el = document.getElementById("boot-error");
+        if (el) {
+          el.style.display = "block";
+          el.textContent =
+            "PRESENT PROMISE REJECTION:\n" + (e.reason && e.reason.message ? e.reason.message : e.reason);
+        }
+      });
+    </script>
     <script type="module" src="/src/present-main.tsx"></script>
   </body>
 </html>

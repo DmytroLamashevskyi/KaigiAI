@@ -67,6 +67,21 @@ pub fn run() {
             commands::check_setup,
             commands::path_exists,
         ])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let label = window.label();
+                if label.starts_with("present-") {
+                    // Present windows are pre-created and reused — hide instead
+                    // of destroy so the ⤢ button can show them again.
+                    api.prevent_close();
+                    let _ = window.hide();
+                } else if label == "main" {
+                    // The hidden present windows would otherwise keep the app
+                    // alive after the main window closes — quit explicitly.
+                    window.app_handle().exit(0);
+                }
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app_handle, event| {
