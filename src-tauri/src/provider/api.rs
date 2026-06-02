@@ -53,8 +53,17 @@ impl ApiProvider {
         llm_model: String,
         stt_endpoint: String,
     ) -> Self {
+        // A finite request timeout so a hung sidecar (whisper/llama that stops
+        // responding — e.g. GPU thrashing near the VRAM limit) fails the segment
+        // instead of leaving its placeholder spinning forever. Normal STT /
+        // translation of one utterance completes in seconds; 90 s is a generous
+        // backstop. Falls back to an untimed client if the builder fails.
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(90))
+            .build()
+            .unwrap_or_else(|_| Client::new());
         Self {
-            client: Client::new(),
+            client,
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
             stt_model,

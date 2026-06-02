@@ -179,6 +179,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!recording) setPending([]);
   }, [recording]);
 
+  // Safety net: if a placeholder never resolves (e.g. a transcript-message /
+  // segment-cancelled event was lost, or a server hung past its timeout), drop
+  // it after a while so the bar can't spin forever. The backend's own request
+  // timeout (~90 s) normally clears it first.
+  useEffect(() => {
+    if (pending.length === 0) return;
+    const id = setInterval(() => {
+      const cutoff = Date.now() - 120_000;
+      setPending((prev) => prev.filter((p) => p.since >= cutoff));
+    }, 5000);
+    return () => clearInterval(id);
+  }, [pending.length]);
+
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", settings.theme);
   }, [settings.theme]);
