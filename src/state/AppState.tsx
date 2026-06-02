@@ -22,6 +22,7 @@ import { useRecordingEvents } from "./useRecordingEvents";
 import {
   conversationMarkdown,
   conversationPrintHtml,
+  detectMessageSide,
   logErr,
   makeId,
   migrateSettings,
@@ -216,6 +217,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!recording) setPending([]);
   }, [recording]);
 
+  // Safety cap on "preparing": the backend fails a stuck server start in ~45 s
+  // per stage, but if startRecording never resolves at all, don't spin forever.
+  useEffect(() => {
+    if (!preparing) return;
+    const id = setTimeout(() => {
+      setPreparing(false);
+      setError(
+        "Сервис не запустился вовремя. Проверьте пути к серверам/моделям в настройках."
+      );
+    }, 120_000);
+    return () => clearTimeout(id);
+  }, [preparing]);
+
   // Safety net: if a placeholder never resolves (e.g. a transcript-message /
   // segment-cancelled event was lost, or a server hung past its timeout), drop
   // it after a while so the bar can't spin forever. The backend's own request
@@ -353,13 +367,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (!activeId || !activeConversation || !text.trim()) return;
         const id = makeId();
         const ts = Date.now();
+        const trimmed = text.trim();
+        // Detect which language was typed by script, so the text lands in the
+        // right column and is translated the right way (e.g. English typed into
+        // a RU↔EN chat → EN side, translate into RU — not "treat as RU").
+        const side = detectMessageSide(
+          trimmed,
+          activeConversation.langA,
+          activeConversation.langB
+        );
+        const detectedLang =
+          side === "A" ? activeConversation.langA : activeConversation.langB;
+        const to =
+          side === "A" ? activeConversation.langB : activeConversation.langA;
         const msg: Message = {
           id,
           conversationId: activeId,
           source: "text",
-          detectedLang: activeConversation.langA,
+          detectedLang,
           speaker: null,
-          originalText: text.trim(),
+          originalText: trimmed,
           translatedText: "",
           startMs: 0,
           endMs: 0,
@@ -373,7 +400,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         backend.addMessage(msg).catch(logErr("addMessage failed"));
         const convId = activeId;
         backend
-          .translate(msg.originalText, activeConversation.langA, activeConversation.langB)
+          .translate(msg.originalText, detectedLang, to)
           .then((translatedText) => {
             const updated = { ...msg, translatedText };
             setMessages((prev) => ({

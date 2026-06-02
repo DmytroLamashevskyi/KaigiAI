@@ -45,3 +45,6 @@ Thumbs.db
 desktop.ini
 *.local
 *.log
+
+# Portable single-exe output
+portable/

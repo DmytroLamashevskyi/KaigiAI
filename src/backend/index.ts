@@ -72,10 +72,10 @@ export interface Backend {
   checkSetup(): Promise<SetupIssue[]>;
   // Whether a file/dir exists (live green-check next to path fields).
   pathExists(path: string): Promise<boolean>;
-  // Open (or focus) the standalone presentation window for one side. In the
-  // desktop app this creates a native Tauri window; the browser falls back to
-  // window.open.
-  openPresent(side: "A" | "B"): Promise<void>;
+  // Open (or focus) the standalone presentation window for one side. `title` is
+  // the language name used for the window caption. In the desktop app this
+  // creates a native Tauri window; the browser falls back to window.open.
+  openPresent(side: "A" | "B", title: string): Promise<void>;
   listAudioDevices(): Promise<string[]>;
   // Open an external URL in the system browser. In the desktop shell a bare
   // <a target=_blank> doesn't reach the OS browser, so links route through here.
@@ -133,7 +133,8 @@ function tauriBackend(): Backend {
     warmupServers: () => invoke<void>("warmup_servers"),
     checkSetup: () => invoke<SetupIssue[]>("check_setup"),
     pathExists: (path) => invoke<boolean>("path_exists", { path }),
-    openPresent: (side) => invoke<void>("open_present_window", { side }),
+    openPresent: (side, title) =>
+      invoke<void>("open_present_window", { side, title }),
     listAudioDevices: () => invoke<string[]>("list_audio_devices"),
     openUrl: (url) => invoke<void>("open_url", { url }),
     onTranscriptMessage: (cb) =>
@@ -286,8 +287,8 @@ function localBackend(): Backend {
     // The browser can't inspect the filesystem; assume ready (mock/echo works).
     checkSetup: () => Promise.resolve([]),
     pathExists: (path) => Promise.resolve(!!path.trim()),
-    openPresent: (side) => {
-      window.open(`?present=${side}`, `kaigiPresent${side}`, "width=900,height=660");
+    openPresent: (side, _title) => {
+      window.open(`present.html?side=${side}`, `kaigiPresent${side}`, "width=900,height=660");
       return Promise.resolve();
     },
     listAudioDevices: () => Promise.resolve([]),

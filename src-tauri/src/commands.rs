@@ -365,10 +365,12 @@ pub fn open_url(url: String) -> CmdResult<()> {
 /// Open (or focus) a standalone presentation window showing one side of the
 /// transcript large, for a second screen/projector. A browser `window.open`
 /// never creates a native window in the Tauri webview, so the ⤢ buttons route
-/// here. The window loads the same app with `?present=A|B`; state syncs over the
-/// Tauri event bus (see src/present/transport.ts).
+/// here. The window loads plain `index.html` (a query string would be taken as a
+/// literal filename → blank page); the side is derived from the window label
+/// (`present-a`/`present-b`) in the frontend. `title` is the language name for
+/// the window caption. State syncs over the Tauri event bus (src/present/transport.ts).
 #[tauri::command]
-pub fn open_present_window(app: AppHandle, side: String) -> CmdResult<()> {
+pub fn open_present_window(app: AppHandle, side: String, title: String) -> CmdResult<()> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
     if side != "A" && side != "B" {
         return Err("side must be A or B".into());
@@ -378,9 +380,9 @@ pub fn open_present_window(app: AppHandle, side: String) -> CmdResult<()> {
         let _ = w.set_focus();
         return Ok(());
     }
-    let url = format!("index.html?present={side}");
-    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
-        .title(format!("KaigiAI — {side}"))
+    let caption = if title.trim().is_empty() { side.clone() } else { title };
+    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("present.html".into()))
+        .title(format!("KaigiAI — {caption}"))
         .inner_size(900.0, 660.0)
         .build()
         .map_err(err)?;

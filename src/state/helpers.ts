@@ -27,6 +27,55 @@ function clockOf(ms: number): string {
   return new Date(ms).toLocaleTimeString();
 }
 
+type Script = "cyrillic" | "japanese" | "hangul" | "arabic" | "latin" | "other";
+
+/** Dominant writing system of a string (mirrors the Rust `dominant_script`). */
+function dominantScript(text: string): Script {
+  let cyr = 0, jp = 0, han = 0, ar = 0, lat = 0;
+  for (const ch of text) {
+    const c = ch.codePointAt(0)!;
+    if (c >= 0x0400 && c <= 0x04ff) cyr++;
+    else if (c >= 0x3040 && c <= 0x30ff) jp += 2; // kana — uniquely Japanese
+    else if (c >= 0x4e00 && c <= 0x9fff) jp += 1; // kanji / CJK
+    else if (c >= 0xac00 && c <= 0xd7af) han++;
+    else if (c >= 0x0600 && c <= 0x06ff) ar++;
+    else if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) lat++;
+  }
+  const max = Math.max(cyr, jp, han, ar, lat);
+  if (max === 0) return "other";
+  if (max === cyr) return "cyrillic";
+  if (max === jp) return "japanese";
+  if (max === han) return "hangul";
+  if (max === ar) return "arabic";
+  return "latin";
+}
+
+function scriptFitsLang(script: Script, lang: string): boolean {
+  const expected: Script =
+    ["ru", "uk", "be", "bg", "sr", "mk"].includes(lang)
+      ? "cyrillic"
+      : lang === "ja" || lang === "zh"
+        ? "japanese"
+        : lang === "ko"
+          ? "hangul"
+          : ["ar", "fa", "ur"].includes(lang)
+            ? "arabic"
+            : "latin";
+  return script === expected;
+}
+
+/** Which side ("A"/"B") typed text belongs to, by script — so manual input is
+ *  placed in the right column and translated the right way (e.g. English typed
+ *  into a RU↔EN chat goes to the EN side, not RU). Defaults to A when ambiguous. */
+export function detectMessageSide(text: string, langA: string, langB: string): "A" | "B" {
+  const script = dominantScript(text);
+  const aFits = scriptFitsLang(script, langA);
+  const bFits = scriptFitsLang(script, langB);
+  if (aFits && !bFits) return "A";
+  if (bFits && !aFits) return "B";
+  return "A";
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")

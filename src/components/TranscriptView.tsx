@@ -36,10 +36,11 @@ function PendingRow({ pending }: { pending: PendingSegment }) {
   );
 }
 
-function openPresent(side: "A" | "B") {
+function openPresent(side: "A" | "B", title: string) {
   // Routes through the backend: a native Tauri window in the desktop app, or
   // window.open in the browser (window.open doesn't work in the Tauri webview).
-  getBackend().openPresent(side).catch(logErr("openPresent failed"));
+  // `title` is the language name for the window caption.
+  getBackend().openPresent(side, title).catch(logErr("openPresent failed"));
 }
 
 export default function TranscriptView() {
@@ -96,7 +97,7 @@ export default function TranscriptView() {
           <button
             className="present-btn"
             title={t("present.open")}
-            onClick={() => openPresent("A")}
+            onClick={() => openPresent("A", languageName(langA))}
           >
             ⤢
           </button>
@@ -114,7 +115,7 @@ export default function TranscriptView() {
           <button
             className="present-btn"
             title={t("present.open")}
-            onClick={() => openPresent("B")}
+            onClick={() => openPresent("B", languageName(langB))}
           >
             ⤢
           </button>

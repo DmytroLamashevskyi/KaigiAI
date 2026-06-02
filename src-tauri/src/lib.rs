@@ -16,13 +16,19 @@ use sidecar::Sidecars;
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            // Log to a file (and stdout) in release too, so users can send a log
+            // when something misbehaves. File lives in the app log dir.
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(log::LevelFilter::Info)
+                    .targets([
+                        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                            file_name: Some("kaigi".into()),
+                        }),
+                    ])
+                    .build(),
+            )?;
 
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;

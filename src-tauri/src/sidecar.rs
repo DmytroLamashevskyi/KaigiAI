@@ -15,8 +15,10 @@ pub const DEFAULT_WHISPER_PORT: u16 = 8771;
 pub const DEFAULT_LLAMA_PORT: u16 = 8770;
 
 /// How long to wait for a freshly-spawned server to start listening. Model load
-/// (esp. whisper large / big GGUF) can take a while.
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
+/// (esp. whisper large / big GGUF) can take a while, but if it hasn't bound the
+/// port in this window something is wrong — fail fast so the UI shows an error
+/// instead of an endless "preparing".
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Default)]
 pub struct Sidecars {

@@ -9,4 +9,14 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
   },
+  build: {
+    rollupOptions: {
+      // Two entry pages: the main app and the standalone presentation window
+      // (resolved relative to the project root).
+      input: {
+        main: "index.html",
+        present: "present.html",
+      },
+    },
+  },
 });
