@@ -10,7 +10,7 @@ interface Props {
 
 export default function LanguageBar({ conversation, recording, onToggleRecording }: Props) {
   const t = useT();
-  const { activeMessages, openSummary } = useApp();
+  const { activeMessages, openSummary, preparing } = useApp();
 
   return (
     <div className="lang-bar">
@@ -18,18 +18,41 @@ export default function LanguageBar({ conversation, recording, onToggleRecording
 
       <div className="lang-bar-actions">
         {activeMessages.length > 0 && (
-          <button className="summary-btn" onClick={openSummary} title={t("summary.title")}>
+          <button
+            className="summary-btn prominent"
+            onClick={openSummary}
+            title={t("summary.title")}
+          >
             ✦ {t("summary.button")}
           </button>
         )}
         <button
-          className={"record-btn" + (recording ? " recording" : "")}
+          className={
+            "record-btn" +
+            (recording ? " recording" : "") +
+            (preparing ? " preparing" : "")
+          }
           onClick={onToggleRecording}
+          disabled={preparing}
         >
-          <span className="rec-dot" />
-          {recording ? t("rec.stop") : t("rec.start")}
+          {preparing ? (
+            <>
+              <span className="rec-spinner" />
+              Подготовка сервиса…
+            </>
+          ) : (
+            <>
+              <span className="rec-dot" />
+              {recording ? t("rec.stop") : t("rec.start")}
+            </>
+          )}
         </button>
       </div>
+      {preparing && (
+        <div className="prepare-bar" title="Запуск локальных серверов (загрузка модели)">
+          <span className="prepare-fill" />
+        </div>
+      )}
     </div>
   );
 }

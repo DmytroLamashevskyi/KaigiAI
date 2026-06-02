@@ -51,6 +51,7 @@ pub fn run() {
             commands::summarize_conversation,
             commands::start_recording,
             commands::stop_recording,
+            commands::warmup_servers,
             commands::is_recording,
             commands::list_audio_devices,
             commands::open_url,

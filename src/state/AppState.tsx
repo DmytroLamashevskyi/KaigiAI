@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -10,14 +11,20 @@ import type {
   Conversation,
   Message,
   PendingSegment,
-  ProviderMode,
   Settings,
   View,
 } from "../types";
-import { displaySpeaker, speakerMap } from "../types";
+import { speakerMap } from "../types";
 import { getBackend } from "../backend";
-import { languageName } from "../data/languages";
 import { isRtl } from "../i18n";
+import { useRecordingEvents } from "./useRecordingEvents";
+import {
+  conversationMarkdown,
+  conversationPrintHtml,
+  logErr,
+  makeId,
+  migrateSettings,
+} from "./helpers";
 
 const DEFAULT_SETTINGS: Settings = {
   appLanguage: "ru",
@@ -25,6 +32,7 @@ const DEFAULT_SETTINGS: Settings = {
   defaultLangB: "en",
   sttMode: "local",
   translationMode: "local",
+  startServersOnLaunch: false,
   apiBaseUrl: "",
   apiKey: "",
   sttModel: "whisper-large-v3",
@@ -51,6 +59,9 @@ interface AppContextValue {
   view: View;
   settings: Settings;
   recording: boolean;
+  /** True while the local servers are being started (model load) before a
+   *  recording can begin — drives the "Подготовка сервиса" indicator. */
+  preparing: boolean;
   error: string | null;
   activeConversation: Conversation | null;
   activeMessages: Message[];
@@ -77,24 +88,18 @@ interface AppContextValue {
    *  fix). `label` null clears the attribution. */
   reassignSpeaker: (messageId: string, label: string | null) => void;
   deleteConversation: (id: string) => void;
-  downloadConversation: (id: string) => void;
+  /** Export modal: conversation id being exported, or null when closed. */
+  exportId: string | null;
+  openExport: (id: string) => void;
+  closeExport: () => void;
+  /** Save the conversation as a Markdown file. */
+  exportMarkdown: (id: string) => void;
+  /** Open a print-ready view and trigger the system print dialog ("Save as
+   *  PDF") — keeps Japanese/Cyrillic glyphs correct via system fonts. */
+  exportPdf: (id: string) => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
-
-function makeId(): string {
-  return Math.random().toString(36).slice(2, 10);
-}
-
-/** Carry forward settings saved before STT/translation were split: a single
- *  `providerMode` becomes both `sttMode` and `translationMode`. */
-function migrateSettings(s: Partial<Settings>): Partial<Settings> {
-  const legacy = (s as { providerMode?: ProviderMode }).providerMode;
-  if (legacy && s.sttMode === undefined && s.translationMode === undefined) {
-    return { ...s, sttMode: legacy, translationMode: legacy };
-  }
-  return s;
-}
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const backend = getBackend();
@@ -104,11 +109,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [view, setView] = useState<View>("transcript");
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [recording, setRecording] = useState(false);
+  const [preparing, setPreparing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const [exportId, setExportId] = useState<string | null>(null);
   // In-flight segments (§10.8): keyed implicitly by pendingId. Cleared when the
   // finished message arrives (by pendingId) or the segment is cancelled.
   const [pending, setPending] = useState<PendingSegment[]>([]);
+
+  // Merge a patch into one conversation by id (dedupes the map-and-replace
+  // pattern used by rename/lang/speaker updates).
+  const patchConversation = useCallback(
+    (id: string, patch: Partial<Conversation>) =>
+      setConversations((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, ...patch } : c))
+      ),
+    []
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -118,121 +135,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
         setConversations(data.conversations);
         setMessages(data.messages);
-        if (data.settings)
-          setSettings((prev) => ({ ...prev, ...migrateSettings(data.settings!) }));
+        const merged: Settings = {
+          ...DEFAULT_SETTINGS,
+          ...(data.settings ? migrateSettings(data.settings) : {}),
+        };
+        setSettings(merged);
         setActiveId(data.conversations[0]?.id ?? null);
-      })
-      .catch((e) => console.error("bootstrap failed", e));
-    return () => {
-      cancelled = true;
-    };
-  }, [backend]);
-
-  // Live transcript messages emitted by the Rust recording pipeline.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    backend
-      .onTranscriptMessage((m, pendingId) => {
-        setMessages((prev) => {
-          const list = prev[m.conversationId] ?? [];
-          const i = list.findIndex((x) => x.id === m.id);
-          const next = i >= 0 ? list.map((x) => (x.id === m.id ? m : x)) : [...list, m];
-          return { ...prev, [m.conversationId]: next };
-        });
-        // The real row replaces its in-flight placeholder (§10.8).
-        if (pendingId !== undefined) {
-          setPending((prev) => prev.filter((p) => p.pendingId !== pendingId));
+        // Optionally pre-start the local servers so the first recording is
+        // instant (the multi-second model load happens now instead).
+        const needsLocal =
+          merged.sttMode === "local" || merged.translationMode === "local";
+        if (merged.startServersOnLaunch && needsLocal) {
+          setPreparing(true);
+          backend
+            .warmupServers()
+            .catch((e) => console.error("warmupServers failed", e))
+            .finally(() => {
+              if (!cancelled) setPreparing(false);
+            });
         }
-        setConversations((prev) =>
-          prev.map((c) =>
-            c.id === m.conversationId ? { ...c, updatedAt: m.createdAt } : c
-          )
-        );
       })
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      })
-      .catch((e) => console.error("transcript subscription failed", e));
+      .catch(logErr("bootstrap failed"));
     return () => {
       cancelled = true;
-      unlisten?.();
     };
   }, [backend]);
 
-  // Non-fatal recording errors from the Rust pipeline (STT/translation), shown
-  // as a dismissible toast.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    backend
-      .onRecordingError((message) => setError(message))
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      })
-      .catch((e) => console.error("error subscription failed", e));
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [backend]);
-
-  // Live placeholders (§10.8). A pause raises a "silence" bar that fills over
-  // `hangoverMs`; if the speaker resumes it's cancelled, otherwise it flips to
-  // a "processing" shimmer until the real message (or a cancel) arrives.
-  useEffect(() => {
-    let unlistenSilence: (() => void) | undefined;
-    let unlistenPending: (() => void) | undefined;
-    let unlistenCancelled: (() => void) | undefined;
-    let cancelled = false;
-    // Insert or update the placeholder for `pendingId`, restarting the phase
-    // clock so the CSS bar animates from the new phase's start.
-    const upsert = (next: PendingSegment) =>
-      setPending((prev) => {
-        const i = prev.findIndex((p) => p.pendingId === next.pendingId);
-        if (i < 0) return [...prev, next];
-        const copy = prev.slice();
-        copy[i] = next;
-        return copy;
-      });
-    backend
-      .onSegmentSilence((p) => {
-        upsert({
-          pendingId: p.pendingId,
-          conversationId: p.conversationId,
-          phase: "silence",
-          hangoverMs: p.hangoverMs,
-          since: Date.now(),
-        });
-      })
-      .then((fn) => (cancelled ? fn() : (unlistenSilence = fn)))
-      .catch((e) => console.error("segment-silence subscription failed", e));
-    backend
-      .onSegmentPending((p) => {
-        upsert({
-          pendingId: p.pendingId,
-          conversationId: p.conversationId,
-          phase: "processing",
-          since: Date.now(),
-        });
-      })
-      .then((fn) => (cancelled ? fn() : (unlistenPending = fn)))
-      .catch((e) => console.error("segment-pending subscription failed", e));
-    backend
-      .onSegmentCancelled((pendingId) => {
-        setPending((prev) => prev.filter((p) => p.pendingId !== pendingId));
-      })
-      .then((fn) => (cancelled ? fn() : (unlistenCancelled = fn)))
-      .catch((e) => console.error("segment-cancelled subscription failed", e));
-    return () => {
-      cancelled = true;
-      unlistenSilence?.();
-      unlistenPending?.();
-      unlistenCancelled?.();
-    };
-  }, [backend]);
+  // Live recording events (transcript rows, errors, §10.8 placeholders).
+  useRecordingEvents(backend, { setMessages, setPending, setConversations, setError });
 
   // Stop leaves no segment in flight; clear any stragglers so a stale
   // placeholder never lingers after recording ends.
@@ -264,25 +194,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
       view,
       settings,
       recording,
+      preparing,
       error,
       activeConversation,
       activeMessages,
       activePending,
       toggleRecording: () => {
-        if (!activeId) return;
+        if (!activeId || preparing) return;
         if (recording) {
           setRecording(false);
-          backend.stopRecording().catch((e) =>
-            console.error("stopRecording failed", e)
-          );
+          backend.stopRecording().catch(logErr("stopRecording failed"));
         } else {
-          setRecording(true);
+          // startRecording resolves only after the local servers are ready and
+          // capture has begun, so we sit in a "preparing" state until then.
           setError(null);
-          backend.startRecording(activeId).catch((e) => {
-            console.error("startRecording failed", e);
-            setError(e instanceof Error ? e.message : String(e));
-            setRecording(false);
-          });
+          setPreparing(true);
+          backend
+            .startRecording(activeId)
+            .then(() => setRecording(true))
+            .catch((e) => {
+              console.error("startRecording failed", e);
+              setError(e instanceof Error ? e.message : String(e));
+            })
+            .finally(() => setPreparing(false));
         }
       },
       dismissError: () => setError(null),
@@ -305,9 +239,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setMessages((prev) => ({ ...prev, [id]: [] }));
         setActiveId(id);
         setView("transcript");
-        backend.createConversation(conv).catch((e) =>
-          console.error("createConversation failed", e)
-        );
+        backend.createConversation(conv).catch(logErr("createConversation failed"));
       },
       openSettings: () => setView("settings"),
       closeSettings: () => setView("transcript"),
@@ -321,35 +253,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateSettings: (patch) => {
         const next = { ...settings, ...patch };
         setSettings(next);
-        backend.saveSettings(next).catch((e) =>
-          console.error("saveSettings failed", e)
-        );
+        backend.saveSettings(next).catch(logErr("saveSettings failed"));
       },
       setConversationLangs: (langA, langB) => {
         if (!activeId) return;
         const ts = Date.now();
-        setConversations((prev) =>
-          prev.map((c) =>
-            c.id === activeId ? { ...c, langA, langB, updatedAt: ts } : c
-          )
-        );
-        backend.setConversationLangs(activeId, langA, langB, ts).catch((e) =>
-          console.error("setConversationLangs failed", e)
-        );
+        patchConversation(activeId, { langA, langB, updatedAt: ts });
+        backend
+          .setConversationLangs(activeId, langA, langB, ts)
+          .catch(logErr("setConversationLangs failed"));
       },
       swapLanguages: () => {
         if (!activeId || !activeConversation) return;
         const ts = Date.now();
         const langA = activeConversation.langB;
         const langB = activeConversation.langA;
-        setConversations((prev) =>
-          prev.map((c) =>
-            c.id === activeId ? { ...c, langA, langB, updatedAt: ts } : c
-          )
-        );
-        backend.setConversationLangs(activeId, langA, langB, ts).catch((e) =>
-          console.error("swapLanguages failed", e)
-        );
+        patchConversation(activeId, { langA, langB, updatedAt: ts });
+        backend
+          .setConversationLangs(activeId, langA, langB, ts)
+          .catch(logErr("swapLanguages failed"));
       },
       addTextMessage: (text) => {
         if (!activeId || !activeConversation || !text.trim()) return;
@@ -371,12 +293,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           ...prev,
           [activeId]: [...(prev[activeId] ?? []), msg],
         }));
-        setConversations((prev) =>
-          prev.map((c) => (c.id === activeId ? { ...c, updatedAt: ts } : c))
-        );
-        backend.addMessage(msg).catch((e) =>
-          console.error("addMessage failed", e)
-        );
+        patchConversation(activeId, { updatedAt: ts });
+        backend.addMessage(msg).catch(logErr("addMessage failed"));
         const convId = activeId;
         backend
           .translate(msg.originalText, activeConversation.langA, activeConversation.langB)
@@ -388,22 +306,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 m.id === id ? updated : m
               ),
             }));
-            backend.addMessage(updated).catch((e) =>
-              console.error("persist translation failed", e)
-            );
+            backend.addMessage(updated).catch(logErr("persist translation failed"));
           })
-          .catch((e) => console.error("translate failed", e));
+          .catch(logErr("translate failed"));
       },
       renameConversation: (id, title) => {
         const t = title.trim();
         if (!t) return;
         const ts = Date.now();
-        setConversations((prev) =>
-          prev.map((c) => (c.id === id ? { ...c, title: t, updatedAt: ts } : c))
-        );
-        backend.renameConversation(id, t, ts).catch((e) =>
-          console.error("renameConversation failed", e)
-        );
+        patchConversation(id, { title: t, updatedAt: ts });
+        backend.renameConversation(id, t, ts).catch(logErr("renameConversation failed"));
       },
       renameSpeaker: (label, name) => {
         if (!activeId) return;
@@ -415,14 +327,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         else delete map[label];
         const json = JSON.stringify(map);
         const ts = Date.now();
-        setConversations((prev) =>
-          prev.map((c) =>
-            c.id === activeId ? { ...c, speakerNames: json, updatedAt: ts } : c
-          )
-        );
-        backend.setSpeakerNames(activeId, json, ts).catch((e) =>
-          console.error("setSpeakerNames failed", e)
-        );
+        patchConversation(activeId, { speakerNames: json, updatedAt: ts });
+        backend.setSpeakerNames(activeId, json, ts).catch(logErr("setSpeakerNames failed"));
       },
       reassignSpeaker: (messageId, label) => {
         if (!activeId) return;
@@ -436,9 +342,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             ),
           };
         });
-        backend.setMessageSpeaker(messageId, label).catch((e) =>
-          console.error("setMessageSpeaker failed", e)
-        );
+        backend.setMessageSpeaker(messageId, label).catch(logErr("setMessageSpeaker failed"));
       },
       deleteConversation: (id) => {
         setConversations((prev) => prev.filter((c) => c.id !== id));
@@ -451,42 +355,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const remaining = conversations.filter((c) => c.id !== id);
           setActiveId(remaining[0]?.id ?? null);
         }
-        backend.deleteConversation(id).catch((e) =>
-          console.error("deleteConversation failed", e)
-        );
+        backend.deleteConversation(id).catch(logErr("deleteConversation failed"));
       },
-      downloadConversation: (id) => {
+      exportId,
+      openExport: (id) => setExportId(id),
+      closeExport: () => setExportId(null),
+      exportMarkdown: (id) => {
         const conv = conversations.find((c) => c.id === id);
         if (!conv) return;
-        const msgs = messages[id] ?? [];
-        const lines = [
-          `# ${conv.title}`,
-          `${languageName(conv.langA)} ↔ ${languageName(conv.langB)}`,
-          "",
-        ];
-        for (const m of msgs) {
-          const name = displaySpeaker(conv, m.speaker);
-          const who = name ? `**${name}** ` : "";
-          const foreign =
-            m.detectedLang !== conv.langA && m.detectedLang !== conv.langB;
-          const tag = foreign ? `[${languageName(m.detectedLang)}] ` : "";
-          lines.push(`${who}${tag}${m.originalText}`);
-          if (m.translatedText) lines.push(`> ${m.translatedText}`);
-          if (foreign && m.translatedTextB) lines.push(`> ${m.translatedTextB}`);
-          lines.push("");
-        }
-        const blob = new Blob([lines.join("\n")], {
-          type: "text/markdown;charset=utf-8",
-        });
+        const md = conversationMarkdown(conv, messages[id] ?? []);
+        const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
         a.download = `${conv.title}.md`;
         a.click();
         URL.revokeObjectURL(url);
+        setExportId(null);
+      },
+      exportPdf: (id) => {
+        const conv = conversations.find((c) => c.id === id);
+        if (!conv) return;
+        // Render a clean print page and let the system print dialog produce the
+        // PDF — WebView2 "Save as PDF" uses real system fonts so Japanese and
+        // Cyrillic glyphs render correctly (a bundled-font generator wouldn't).
+        const html = conversationPrintHtml(conv, messages[id] ?? []);
+        const w = window.open("", "_blank", "width=820,height=900");
+        if (w) {
+          w.document.write(html);
+          w.document.close();
+        }
+        setExportId(null);
       },
     };
-  }, [backend, conversations, messages, activeId, view, settings, recording, error, summaryOpen, pending]);
+  }, [backend, patchConversation, conversations, messages, activeId, view, settings, recording, preparing, error, summaryOpen, exportId, pending]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

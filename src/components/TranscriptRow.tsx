@@ -9,11 +9,15 @@ interface Props {
   conversation: Conversation;
 }
 
-function formatTime(ms: number): string {
-  const totalSec = Math.floor(ms / 1000);
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  return `${m}:${s.toString().padStart(2, "0")}`;
+/** System wall-clock time the message was recorded (HH:MM:SS, local). The full
+ *  date/time shows on hover so it's clear *when* something was said. */
+function RowTime({ createdAt }: { createdAt: number }) {
+  const d = new Date(createdAt);
+  return (
+    <div className="row-time" title={d.toLocaleString()}>
+      {d.toLocaleTimeString()}
+    </div>
+  );
 }
 
 /** Distinct speaker labels seen in a conversation, ordered numerically so
@@ -189,7 +193,7 @@ export default function TranscriptRow({ message, conversation }: Props) {
             conversation={conversation}
             messageId={message.id}
           />
-          <div className="row-time">{formatTime(message.startMs)}</div>
+          <RowTime createdAt={message.createdAt} />
           <Cell
             isOriginal={false}
             text={message.translatedTextB ?? ""}
@@ -212,7 +216,7 @@ export default function TranscriptRow({ message, conversation }: Props) {
         speaker={message.speaker}
         messageId={message.id}
       />
-      <div className="row-time">{formatTime(message.startMs)}</div>
+      <RowTime createdAt={message.createdAt} />
       <Cell
         isOriginal={!spokenOnA}
         text={spokenOnA ? message.translatedText : message.originalText}

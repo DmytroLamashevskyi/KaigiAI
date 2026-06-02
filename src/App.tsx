@@ -4,6 +4,7 @@ import Sidebar from "./components/Sidebar";
 import TranscriptView from "./components/TranscriptView";
 import Settings from "./components/Settings";
 import SummaryModal from "./components/SummaryModal";
+import ExportModal from "./components/ExportModal";
 import PresentBroadcaster from "./present/PresentBroadcaster";
 import "./styles/app.css";
 
@@ -44,6 +45,7 @@ export default function App() {
       </div>
       <ErrorToast />
       <SummaryModal />
+      <ExportModal />
       <PresentBroadcaster />
     </AppProvider>
   );

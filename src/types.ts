@@ -87,6 +87,9 @@ export interface Settings {
   sttMode: ProviderMode;
   /** Where translation/summary runs. */
   translationMode: ProviderMode;
+  /** Pre-start the local servers on app launch so the first recording is
+   *  instant. Off = start lazily on the Record button (frees VRAM until used). */
+  startServersOnLaunch: boolean;
   apiBaseUrl: string;
   apiKey: string;
   sttModel: string;

@@ -178,6 +178,23 @@ pub fn stop_recording(recorder: State<'_, Recorder>) -> CmdResult<()> {
     Ok(())
 }
 
+/// Pre-start the local sidecar servers the current settings need, without
+/// recording. Lets the UI "warm up" on launch (or on demand) so the first
+/// recording isn't blocked by the multi-second model load. No-op for cloud-only
+/// setups. Returns once the needed servers report ready.
+#[tauri::command]
+pub async fn warmup_servers(db: State<'_, Db>, sidecars: State<'_, Sidecars>) -> CmdResult<()> {
+    let mut settings = db.get_app_settings().await.map_err(err)?;
+    inject_api_key(&mut settings);
+    if provider::stt_is_local(&settings) {
+        sidecars.ensure_whisper(&settings)?;
+    }
+    if provider::translation_is_local(&settings) {
+        sidecars.ensure_llama(&settings)?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn is_recording(recorder: State<'_, Recorder>) -> bool {
     recorder.is_recording()

@@ -54,6 +54,9 @@ export interface Backend {
   summarize(conversationId: string, lang: string): Promise<string>;
   startRecording(conversationId: string): Promise<void>;
   stopRecording(): Promise<void>;
+  // Pre-start the local sidecar servers the current settings need (no-op for
+  // cloud-only setups / browser). Resolves once they're ready.
+  warmupServers(): Promise<void>;
   listAudioDevices(): Promise<string[]>;
   // Open an external URL in the system browser. In the desktop shell a bare
   // <a target=_blank> doesn't reach the OS browser, so links route through here.
@@ -104,6 +107,7 @@ function tauriBackend(): Backend {
     startRecording: (conversationId) =>
       invoke<void>("start_recording", { conversationId }),
     stopRecording: () => invoke<void>("stop_recording"),
+    warmupServers: () => invoke<void>("warmup_servers"),
     listAudioDevices: () => invoke<string[]>("list_audio_devices"),
     openUrl: (url) => invoke<void>("open_url", { url }),
     onTranscriptMessage: (cb) =>
@@ -244,6 +248,7 @@ function localBackend(): Backend {
     startRecording: () =>
       Promise.reject(new Error("Recording is only available in the desktop app")),
     stopRecording: () => Promise.resolve(),
+    warmupServers: () => Promise.resolve(),
     listAudioDevices: () => Promise.resolve([]),
     openUrl: (url) => {
       window.open(url, "_blank", "noopener,noreferrer");

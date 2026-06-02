@@ -13,7 +13,7 @@ export default function Sidebar() {
     openSettings,
     renameConversation,
     deleteConversation,
-    downloadConversation,
+    openExport,
   } = useApp();
   const t = useT();
 
@@ -90,7 +90,7 @@ export default function Sidebar() {
                 </button>
                 <button
                   onClick={() => {
-                    downloadConversation(c.id);
+                    openExport(c.id);
                     setMenuId(null);
                   }}
                 >
