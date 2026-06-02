@@ -339,6 +339,20 @@ impl Db {
         Ok(())
     }
 
+    /// File paths of saved audio clips for a conversation's messages, ordered by
+    /// message start time. Used by the ZIP export.
+    pub async fn list_audio_clips(&self, conversation_id: &str) -> Result<Vec<(String, String)>, sqlx::Error> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT a.message_id, a.path FROM audio_clip a \
+             JOIN message m ON m.id = a.message_id \
+             WHERE m.conversation_id = ? ORDER BY m.start_ms ASC",
+        )
+        .bind(conversation_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// The app settings blob as JSON (empty object if never saved).
     pub async fn get_app_settings(&self) -> Result<serde_json::Value, sqlx::Error> {
         let raw = self.get_setting(SETTINGS_KEY).await?;

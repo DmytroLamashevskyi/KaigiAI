@@ -84,6 +84,17 @@ export default function AudioSection() {
         </button>
       </Field>
       <Field
+        label="Папка для экспорта (ZIP)"
+        hint="Куда сохранять ZIP-архивы (транскрипт + аудио). Пусто — папка по умолчанию в данных приложения."
+      >
+        <input
+          className="settings-input"
+          value={settings.exportDir}
+          placeholder="C:\\Users\\you\\Documents\\KaigiAI"
+          onChange={(e) => updateSettings({ exportDir: e.target.value })}
+        />
+      </Field>
+      <Field
         label={t("settings.diarizationModel")}
         hint={t("settings.diarizationModelHint")}
       >

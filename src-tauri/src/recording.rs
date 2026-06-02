@@ -399,10 +399,10 @@ async fn recent_context(db: &Db, conv_id: &str) -> String {
 
 /// Whisper emits non-speech placeholders such as `[BLANK_AUDIO]`, `[Music]`,
 /// `[Japanese]` or `(speaking foreign language)` for segments it can't actually
-/// transcribe (silence, noise, or speech in an unexpected language). These are
-/// markers, not utterances — routing one into the transcript shows garbage on
-/// the wrong side, so we drop any segment whose text is entirely one bracketed
-/// or parenthesised token.
+/// transcribe (silence, noise, or speech in an unexpected language). It also
+/// transcribes throat-clears and hesitations literally ("ahem", "cough", "um").
+/// These are markers, not utterances — routing one into the transcript shows
+/// garbage on the wrong side, so we drop a segment that is *only* such filler.
 fn is_noise(text: &str) -> bool {
     let t = text.trim();
     if t.len() < 2 {
@@ -413,7 +413,57 @@ fn is_noise(text: &str) -> bool {
         || (t.starts_with('*') && t.ends_with('*'));
     // Only a marker if there's a single token (no inner closer then more text),
     // e.g. "[Music]" but not "[John] said hi".
-    bracketed && !t[1..t.len() - 1].contains(|c| matches!(c, '[' | ']' | '(' | ')'))
+    if bracketed && !t[1..t.len() - 1].contains(|c| matches!(c, '[' | ']' | '(' | ')')) {
+        return true;
+    }
+    // Non-lexical interjections: drop a short segment made up only of fillers
+    // (a cough, throat-clear, "um"…) which would otherwise clutter the transcript
+    // and get pointlessly "translated". Punctuation is stripped per word.
+    let words: Vec<String> = t
+        .split_whitespace()
+        .map(|w| {
+            w.chars()
+                .filter(|c| c.is_alphanumeric())
+                .collect::<String>()
+                .to_lowercase()
+        })
+        .filter(|w| !w.is_empty())
+        .collect();
+    !words.is_empty() && words.len() <= 3 && words.iter().all(|w| is_filler(w))
+}
+
+/// A single non-lexical filler / hesitation token (whole-segment matches only,
+/// so real words inside a sentence are never dropped). Kept conservative — no
+/// meaningful short words like "да"/"yes"/"ok".
+fn is_filler(w: &str) -> bool {
+    matches!(
+        w,
+        "ahem"
+            | "cough"
+            | "coughs"
+            | "coughing"
+            | "um"
+            | "umm"
+            | "uh"
+            | "uhh"
+            | "uhm"
+            | "erm"
+            | "er"
+            | "hmm"
+            | "hm"
+            | "hmmm"
+            | "mm"
+            | "mmm"
+            | "mhm"
+            | "huh"
+            | "кхм"
+            | "кх"
+            | "эм"
+            | "ээ"
+            | "эээ"
+            | "мхм"
+            | "кашель"
+    )
 }
 
 /// The writing system a piece of text is mostly in. Used to sanity-check (and
@@ -546,6 +596,21 @@ fn next_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filler_only_segments_are_noise() {
+        assert!(is_noise("ahem"));
+        assert!(is_noise("cough"));
+        assert!(is_noise("(coughs)"));
+        assert!(is_noise("Um, uh"));
+        assert!(is_noise("кхм"));
+        assert!(is_noise("[Music]"));
+        // Real utterances must survive, including ones that contain a filler word.
+        assert!(!is_noise("um, let's go to Tokyo"));
+        assert!(!is_noise("да"));
+        assert!(!is_noise("привет как дела"));
+        assert!(!is_noise("okay"));
+    }
 
     #[test]
     fn script_detection_basic() {

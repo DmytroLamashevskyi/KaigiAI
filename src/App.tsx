@@ -36,6 +36,25 @@ function ErrorToast() {
   );
 }
 
+function NoticeToast() {
+  const { notice, dismissNotice } = useApp();
+  useEffect(() => {
+    if (!notice) return;
+    const id = setTimeout(dismissNotice, 6000);
+    return () => clearTimeout(id);
+  }, [notice, dismissNotice]);
+  if (!notice) return null;
+  return (
+    <div className="toast toast-notice" role="status">
+      <span className="toast-icon">✓</span>
+      <span className="toast-msg">{notice}</span>
+      <button className="toast-close" onClick={dismissNotice} aria-label="Dismiss">
+        ✕
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
   return (
     <AppProvider>
@@ -44,6 +63,7 @@ export default function App() {
         <MainArea />
       </div>
       <ErrorToast />
+      <NoticeToast />
       <SummaryModal />
       <ExportModal />
       <PresentBroadcaster />

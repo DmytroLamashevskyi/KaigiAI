@@ -52,11 +52,25 @@ export interface Backend {
   saveSettings(s: Settings): Promise<void>;
   translate(text: string, from: string, to: string): Promise<string>;
   summarize(conversationId: string, lang: string): Promise<string>;
+  // Generate a short conversation title with the LLM from the transcript so far.
+  generateTitle(conversationId: string, lang: string): Promise<string>;
+  // Write a ZIP (markdown transcript + audio clips) for a conversation into
+  // `destDir` (empty → app default). Resolves with the written file path.
+  exportZip(
+    conversationId: string,
+    title: string,
+    markdown: string,
+    destDir: string
+  ): Promise<string>;
   startRecording(conversationId: string): Promise<void>;
   stopRecording(): Promise<void>;
   // Pre-start the local sidecar servers the current settings need (no-op for
   // cloud-only setups / browser). Resolves once they're ready.
   warmupServers(): Promise<void>;
+  // Open (or focus) the standalone presentation window for one side. In the
+  // desktop app this creates a native Tauri window; the browser falls back to
+  // window.open.
+  openPresent(side: "A" | "B"): Promise<void>;
   listAudioDevices(): Promise<string[]>;
   // Open an external URL in the system browser. In the desktop shell a bare
   // <a target=_blank> doesn't reach the OS browser, so links route through here.
@@ -104,10 +118,15 @@ function tauriBackend(): Backend {
       invoke<string>("translate_text", { text, from, to }),
     summarize: (conversationId, lang) =>
       invoke<string>("summarize_conversation", { conversationId, lang }),
+    generateTitle: (conversationId, lang) =>
+      invoke<string>("generate_title", { conversationId, lang }),
+    exportZip: (conversationId, title, markdown, destDir) =>
+      invoke<string>("export_zip", { conversationId, title, markdown, destDir }),
     startRecording: (conversationId) =>
       invoke<void>("start_recording", { conversationId }),
     stopRecording: () => invoke<void>("stop_recording"),
     warmupServers: () => invoke<void>("warmup_servers"),
+    openPresent: (side) => invoke<void>("open_present_window", { side }),
     listAudioDevices: () => invoke<string[]>("list_audio_devices"),
     openUrl: (url) => invoke<void>("open_url", { url }),
     onTranscriptMessage: (cb) =>
@@ -244,11 +263,23 @@ function localBackend(): Backend {
         .join("\n\n");
       return browserSummarize(s.settings, transcript, lang);
     },
+    generateTitle: (conversationId) => {
+      const s = readLocal();
+      const first = (s.messages[conversationId] ?? [])[0];
+      return Promise.resolve(first?.originalText?.slice(0, 40) || "Диалог");
+    },
+    // ZIP bundles on-disk audio clips, which only exist in the desktop app.
+    exportZip: () =>
+      Promise.reject(new Error("ZIP-экспорт доступен только в десктоп-приложении")),
     // Live mic capture lives in the Rust core; unavailable in the browser.
     startRecording: () =>
       Promise.reject(new Error("Recording is only available in the desktop app")),
     stopRecording: () => Promise.resolve(),
     warmupServers: () => Promise.resolve(),
+    openPresent: (side) => {
+      window.open(`?present=${side}`, `kaigiPresent${side}`, "width=900,height=660");
+      return Promise.resolve();
+    },
     listAudioDevices: () => Promise.resolve([]),
     openUrl: (url) => {
       window.open(url, "_blank", "noopener,noreferrer");

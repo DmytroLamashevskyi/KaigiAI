@@ -109,6 +109,8 @@ export interface Settings {
    *  shown as full-width "foreign" rows (§10.7 variant A). Off → every utterance
    *  is forced onto langA/langB, avoiding spurious mislabelled rows. */
   detectForeignLanguages: boolean;
+  /** Folder where ZIP exports are written (empty → a default under app data). */
+  exportDir: string;
   saveAudio: boolean;
   fontSize: FontSize;
   theme: "light" | "dark";

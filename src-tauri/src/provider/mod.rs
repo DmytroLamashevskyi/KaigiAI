@@ -53,6 +53,9 @@ pub trait TranslationProvider: Send + Sync {
         context: &str,
     ) -> ProviderResult<String>;
     async fn summarize(&self, transcript: &str, lang: &str) -> ProviderResult<String>;
+    /// A short (3–6 word) conversation title in `lang`, derived from the
+    /// transcript. Used by the "auto-title" action.
+    async fn title(&self, transcript: &str, lang: &str) -> ProviderResult<String>;
 }
 
 /// The mode of one pipeline stage ("local" or "api"). STT and translation are

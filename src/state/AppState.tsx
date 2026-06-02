@@ -47,6 +47,7 @@ const DEFAULT_SETTINGS: Settings = {
   audioSource: "mic",
   silenceMs: 3000,
   detectForeignLanguages: false,
+  exportDir: "",
   saveAudio: false,
   fontSize: "medium",
   theme: "light",
@@ -63,6 +64,9 @@ interface AppContextValue {
    *  recording can begin — drives the "Подготовка сервиса" indicator. */
   preparing: boolean;
   error: string | null;
+  /** Transient success/info message (e.g. "saved to …"), shown as a toast. */
+  notice: string | null;
+  dismissNotice: () => void;
   activeConversation: Conversation | null;
   activeMessages: Message[];
   /** In-flight segments for the active conversation, shown as live-timer
@@ -97,6 +101,10 @@ interface AppContextValue {
   /** Open a print-ready view and trigger the system print dialog ("Save as
    *  PDF") — keeps Japanese/Cyrillic glyphs correct via system fonts. */
   exportPdf: (id: string) => void;
+  /** Write a ZIP (transcript + audio clips) to the configured export folder. */
+  exportZip: (id: string) => void;
+  /** Generate a conversation title with the LLM and apply it. */
+  autoTitle: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -111,6 +119,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [recording, setRecording] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [exportId, setExportId] = useState<string | null>(null);
   // In-flight segments (§10.8): keyed implicitly by pendingId. Cleared when the
@@ -196,6 +205,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       recording,
       preparing,
       error,
+      notice,
+      dismissNotice: () => setNotice(null),
       activeConversation,
       activeMessages,
       activePending,
@@ -376,19 +387,62 @@ export function AppProvider({ children }: { children: ReactNode }) {
       exportPdf: (id) => {
         const conv = conversations.find((c) => c.id === id);
         if (!conv) return;
-        // Render a clean print page and let the system print dialog produce the
-        // PDF — WebView2 "Save as PDF" uses real system fonts so Japanese and
-        // Cyrillic glyphs render correctly (a bundled-font generator wouldn't).
+        // Print a clean transcript via a hidden iframe → the system print dialog
+        // ("Save as PDF"). An iframe works in the Tauri webview (window.open does
+        // not), and WebView2's print uses real system fonts so Japanese/Cyrillic
+        // render correctly (a bundled-font PDF generator wouldn't).
         const html = conversationPrintHtml(conv, messages[id] ?? []);
-        const w = window.open("", "_blank", "width=820,height=900");
-        if (w) {
-          w.document.write(html);
-          w.document.close();
+        const iframe = document.createElement("iframe");
+        iframe.setAttribute("aria-hidden", "true");
+        Object.assign(iframe.style, {
+          position: "fixed",
+          right: "0",
+          bottom: "0",
+          width: "0",
+          height: "0",
+          border: "0",
+        });
+        document.body.appendChild(iframe);
+        const cw = iframe.contentWindow;
+        if (cw) {
+          cw.document.open();
+          cw.document.write(html);
+          cw.document.close();
+          cw.onafterprint = () => setTimeout(() => iframe.remove(), 300);
+          setTimeout(() => {
+            cw.focus();
+            cw.print();
+          }, 250);
         }
         setExportId(null);
       },
+      exportZip: (id) => {
+        const conv = conversations.find((c) => c.id === id);
+        if (!conv) return;
+        const md = conversationMarkdown(conv, messages[id] ?? []);
+        backend
+          .exportZip(id, conv.title, md, settings.exportDir)
+          .then((path) => setNotice(`Сохранено: ${path}`))
+          .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+        setExportId(null);
+      },
+      autoTitle: async () => {
+        if (!activeId) return;
+        try {
+          const title = await backend.generateTitle(activeId, settings.appLanguage);
+          const t = title.trim();
+          if (t) {
+            patchConversation(activeId, { title: t, updatedAt: Date.now() });
+            backend
+              .renameConversation(activeId, t, Date.now())
+              .catch(logErr("renameConversation failed"));
+          }
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e));
+        }
+      },
     };
-  }, [backend, patchConversation, conversations, messages, activeId, view, settings, recording, preparing, error, summaryOpen, exportId, pending]);
+  }, [backend, patchConversation, conversations, messages, activeId, view, settings, recording, preparing, error, notice, summaryOpen, exportId, pending]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

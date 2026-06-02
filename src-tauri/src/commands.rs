@@ -2,7 +2,7 @@
 //! `Db` service so the same persistence logic can later be exposed over HTTP/WS
 //! by an Axum server without rewriting anything.
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::db::{Bootstrap, Conversation, Db, Message};
 use crate::provider;
@@ -143,6 +143,94 @@ pub async fn summarize_conversation(
         .await
 }
 
+/// Generate a short conversation title with the translation LLM, from the
+/// transcript so far. Returns the title; the frontend persists it via rename.
+#[tauri::command]
+pub async fn generate_title(
+    db: State<'_, Db>,
+    sidecars: State<'_, Sidecars>,
+    conversation_id: String,
+    lang: String,
+) -> CmdResult<String> {
+    let messages = db.list_messages(&conversation_id).await.map_err(err)?;
+    if messages.is_empty() {
+        return Err("nothing to title yet".into());
+    }
+    // A compact transcript (cap length so a long meeting doesn't blow the prompt).
+    let mut transcript = String::new();
+    for m in &messages {
+        transcript.push_str(&m.original_text);
+        transcript.push('\n');
+        if transcript.len() > 4000 {
+            break;
+        }
+    }
+    let mut settings = db.get_app_settings().await.map_err(err)?;
+    inject_api_key(&mut settings);
+    if provider::translation_is_local(&settings) {
+        let url = sidecars.ensure_llama(&settings)?;
+        set_str(&mut settings, "localLlmBaseUrl", url);
+    }
+    provider::translation_from_settings(&settings)
+        .title(&transcript, &lang)
+        .await
+}
+
+/// Export a conversation as a ZIP containing the markdown transcript plus any
+/// saved audio clips. `dest_dir` is the user's export folder (empty → a default
+/// under app data). Returns the written ZIP path.
+#[tauri::command]
+pub async fn export_zip(
+    app: AppHandle,
+    db: State<'_, Db>,
+    conversation_id: String,
+    title: String,
+    markdown: String,
+    dest_dir: String,
+) -> CmdResult<String> {
+    use std::io::Write;
+    let clips = db.list_audio_clips(&conversation_id).await.map_err(err)?;
+
+    let dir = if dest_dir.trim().is_empty() {
+        app.path().app_data_dir().map_err(err)?.join("exports")
+    } else {
+        std::path::PathBuf::from(dest_dir.trim())
+    };
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    let zip_path = dir.join(format!("{}.zip", sanitize_filename(&title)));
+
+    let file = std::fs::File::create(&zip_path).map_err(err)?;
+    let mut zip = zip::ZipWriter::new(file);
+    let opts = zip::write::SimpleFileOptions::default();
+
+    zip.start_file("transcript.md", opts).map_err(err)?;
+    zip.write_all(markdown.as_bytes()).map_err(err)?;
+
+    for (message_id, path) in clips {
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                let name = format!("audio/{message_id}.wav");
+                zip.start_file(name, opts).map_err(err)?;
+                zip.write_all(&bytes).map_err(err)?;
+            }
+            // A missing clip file shouldn't abort the whole export.
+            Err(e) => log::warn!("skip audio clip {path}: {e}"),
+        }
+    }
+    zip.finish().map_err(err)?;
+    Ok(zip_path.to_string_lossy().to_string())
+}
+
+/// Replace characters that are invalid in file names with underscores.
+fn sanitize_filename(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .collect();
+    let trimmed = cleaned.trim().trim_matches('.');
+    if trimmed.is_empty() { "conversation".to_string() } else { trimmed.to_string() }
+}
+
 #[tauri::command]
 pub async fn start_recording(
     app: AppHandle,
@@ -215,6 +303,31 @@ pub fn open_url(url: String) -> CmdResult<()> {
         return Err("only http(s) URLs may be opened".into());
     }
     open_external(&url)
+}
+
+/// Open (or focus) a standalone presentation window showing one side of the
+/// transcript large, for a second screen/projector. A browser `window.open`
+/// never creates a native window in the Tauri webview, so the ⤢ buttons route
+/// here. The window loads the same app with `?present=A|B`; state syncs over the
+/// Tauri event bus (see src/present/transport.ts).
+#[tauri::command]
+pub fn open_present_window(app: AppHandle, side: String) -> CmdResult<()> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    if side != "A" && side != "B" {
+        return Err("side must be A or B".into());
+    }
+    let label = format!("present-{}", side.to_lowercase());
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    let url = format!("index.html?present={side}");
+    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
+        .title(format!("KaigiAI — {side}"))
+        .inner_size(900.0, 660.0)
+        .build()
+        .map_err(err)?;
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]

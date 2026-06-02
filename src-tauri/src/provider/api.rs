@@ -125,6 +125,17 @@ impl TranslationProvider for ApiProvider {
         );
         self.chat(&system, transcript).await
     }
+
+    async fn title(&self, transcript: &str, lang: &str) -> ProviderResult<String> {
+        let system = format!(
+            "Generate a very short title (3 to 6 words) for this conversation transcript, \
+             in language '{lang}'. Capture the main topic. Output ONLY the title text — no \
+             quotes, no punctuation at the end, no labels."
+        );
+        let raw = self.chat(&system, transcript).await?;
+        // Models sometimes wrap the title in quotes or add a trailing period.
+        Ok(raw.trim().trim_matches(|c| c == '"' || c == '«' || c == '»' || c == '.').trim().to_string())
+    }
 }
 
 #[async_trait]

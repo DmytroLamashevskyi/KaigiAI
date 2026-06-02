@@ -49,12 +49,15 @@ pub fn run() {
             commands::save_settings,
             commands::translate_text,
             commands::summarize_conversation,
+            commands::generate_title,
+            commands::export_zip,
             commands::start_recording,
             commands::stop_recording,
             commands::warmup_servers,
             commands::is_recording,
             commands::list_audio_devices,
             commands::open_url,
+            commands::open_present_window,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

@@ -1,5 +1,7 @@
 import { useEffect, useRef, type CSSProperties } from "react";
 import { useApp } from "../state/AppState";
+import { getBackend } from "../backend";
+import { logErr } from "../state/helpers";
 import type { PendingSegment } from "../types";
 import { languageName, LANGUAGES } from "../data/languages";
 import { FONT_SCALE } from "../data/fontSize";
@@ -35,11 +37,9 @@ function PendingRow({ pending }: { pending: PendingSegment }) {
 }
 
 function openPresent(side: "A" | "B") {
-  window.open(
-    `?present=${side}`,
-    `kaigiPresent${side}`,
-    "width=900,height=640"
-  );
+  // Routes through the backend: a native Tauri window in the desktop app, or
+  // window.open in the browser (window.open doesn't work in the Tauri webview).
+  getBackend().openPresent(side).catch(logErr("openPresent failed"));
 }
 
 export default function TranscriptView() {

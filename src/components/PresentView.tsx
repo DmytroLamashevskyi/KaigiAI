@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { PRESENT_CHANNEL, type PresentState } from "../present/channel";
+import type { PresentState } from "../present/channel";
+import { onPresentState, postPresentHello } from "../present/transport";
 import { translate, isRtl } from "../i18n";
 
 // Rendered in a standalone window (?present=A|B). Receives live updates over a
@@ -11,12 +12,9 @@ export default function PresentView({ side }: { side: "A" | "B" }) {
   const bodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const ch = new BroadcastChannel(PRESENT_CHANNEL);
-    ch.onmessage = (e) => {
-      if (e.data?.type === "state") setState(e.data as PresentState);
-    };
-    ch.postMessage({ type: "hello" });
-    return () => ch.close();
+    const off = onPresentState(setState);
+    postPresentHello();
+    return off;
   }, []);
 
   useEffect(() => {

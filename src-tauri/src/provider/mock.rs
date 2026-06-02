@@ -32,4 +32,8 @@ impl TranslationProvider for MockProvider {
     async fn summarize(&self, _transcript: &str, _lang: &str) -> ProviderResult<String> {
         Ok("## (mock summary)\n- Key point 1\n- Key point 2\n- Action item".into())
     }
+
+    async fn title(&self, _transcript: &str, _lang: &str) -> ProviderResult<String> {
+        Ok("Mock conversation".into())
+    }
 }

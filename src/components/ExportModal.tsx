@@ -4,7 +4,8 @@ import { useApp } from "../state/AppState";
  *  system print dialog → "Save as PDF", which renders Japanese/Cyrillic with
  *  real system fonts). Opened from the conversation menu in the sidebar. */
 export default function ExportModal() {
-  const { exportId, closeExport, exportMarkdown, exportPdf, conversations } = useApp();
+  const { exportId, closeExport, exportMarkdown, exportPdf, exportZip, conversations } =
+    useApp();
   if (!exportId) return null;
   const conv = conversations.find((c) => c.id === exportId);
 
@@ -29,6 +30,13 @@ export default function ExportModal() {
             <span className="export-choice-icon">⤓</span>
             <span className="export-choice-name">Markdown</span>
             <span className="export-choice-note">Текстовый файл .md.</span>
+          </button>
+          <button className="export-choice" onClick={() => exportZip(exportId)}>
+            <span className="export-choice-icon">🗜</span>
+            <span className="export-choice-name">ZIP</span>
+            <span className="export-choice-note">
+              Транскрипт + аудио-записи в папку из настроек.
+            </span>
           </button>
         </div>
       </div>

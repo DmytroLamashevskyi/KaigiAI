@@ -2,13 +2,14 @@ import { useEffect, useRef } from "react";
 import { useApp } from "../state/AppState";
 import { languageName } from "../data/languages";
 import { FONT_SCALE } from "../data/fontSize";
-import { PRESENT_CHANNEL, type PresentState } from "./channel";
+import type { PresentState } from "./channel";
+import { onPresentHello, postPresentState } from "./transport";
 
 // Lives in the main window. Mirrors the active conversation to any open
-// presentation windows over a BroadcastChannel.
+// presentation windows over the cross-window transport (Tauri events / browser
+// BroadcastChannel).
 export default function PresentBroadcaster() {
   const { activeConversation, activeMessages, settings, recording } = useApp();
-  const chanRef = useRef<BroadcastChannel | null>(null);
   const stateRef = useRef<PresentState | null>(null);
 
   const langA = activeConversation?.langA ?? "";
@@ -32,19 +33,17 @@ export default function PresentBroadcaster() {
     }),
   };
 
-  useEffect(() => {
-    const ch = new BroadcastChannel(PRESENT_CHANNEL);
-    ch.onmessage = (e) => {
-      if (e.data?.type === "hello" && stateRef.current) {
-        ch.postMessage(stateRef.current);
-      }
-    };
-    chanRef.current = ch;
-    return () => ch.close();
-  }, []);
+  // A present window that just opened asks for the current state; reply to it.
+  useEffect(
+    () => onPresentHello(() => {
+      if (stateRef.current) postPresentState(stateRef.current);
+    }),
+    []
+  );
 
+  // Push every time the mirrored state changes.
   useEffect(() => {
-    chanRef.current?.postMessage(stateRef.current);
+    if (stateRef.current) postPresentState(stateRef.current);
   }, [activeConversation, activeMessages, settings, recording]);
 
   return null;

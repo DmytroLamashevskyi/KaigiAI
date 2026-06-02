@@ -261,6 +261,12 @@
   background: var(--bg-hover);
 }
 
+.lang-bar-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
 .conv-title-lg {
   font-size: 15px;
   font-weight: 600;
@@ -268,6 +274,25 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.auto-title-btn {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+.auto-title-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.auto-title-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .record-btn {
@@ -341,6 +366,7 @@
 .col-headers {
   display: grid;
   grid-template-columns: 1fr 56px 1fr;
+  column-gap: 10px;
   padding: 10px 24px 6px;
   border-bottom: 1px solid var(--border);
 }
@@ -405,7 +431,8 @@
   display: grid;
   grid-template-columns: 1fr 56px 1fr;
   align-items: start;
-  gap: 0;
+  /* Small horizontal gap so the centered timestamp never touches the bubbles. */
+  column-gap: 10px;
 }
 
 .cell {
@@ -606,7 +633,7 @@
   display: grid;
   grid-template-columns: 1fr 56px 1fr;
   align-items: start;
-  gap: 0;
+  column-gap: 10px;
   margin-top: 4px;
 }
 .lang-badge {
@@ -1056,6 +1083,16 @@
   border-color: #6b2e2e;
   color: #f4c7c7;
 }
+.toast-notice {
+  background: #eaf6ec;
+  border: 1px solid #b9dcc0;
+  color: #1f5e2e;
+}
+[data-theme="dark"] .toast-notice {
+  background: #1d3a23;
+  border-color: #2e6b3a;
+  color: #c7f4d0;
+}
 .toast-icon {
   flex: 0 0 auto;
   font-size: 15px;
@@ -1118,15 +1155,17 @@
 }
 .export-choices {
   display: flex;
-  gap: 12px;
+  flex-direction: column;
+  gap: 10px;
 }
 .export-choice {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  padding: 16px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 14px;
+  row-gap: 2px;
+  text-align: left;
+  padding: 13px 16px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-strong);
   background: var(--bg-surface);
@@ -1137,18 +1176,20 @@
   background: var(--bg-hover);
 }
 .export-choice-icon {
-  font-size: 22px;
+  grid-row: 1 / 3;
+  font-size: 24px;
 }
 .export-choice-name {
+  grid-column: 2;
   font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
 }
 .export-choice-note {
+  grid-column: 2;
   font-size: 11.5px;
   line-height: 1.4;
   color: var(--text-muted);
-  text-align: left;
 }
 
 .modal-backdrop {

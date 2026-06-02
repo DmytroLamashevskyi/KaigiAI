@@ -93,6 +93,5 @@ export function conversationPrintHtml(conv: Conversation, msgs: Message[]): stri
 </style></head><body>
 <h1>${title}</h1><div class="sub">${langs} · ${date}</div>
 ${rows}
-<script>window.onload=function(){setTimeout(function(){window.print()},250)};window.onafterprint=function(){window.close()};</script>
 </body></html>`;
 }

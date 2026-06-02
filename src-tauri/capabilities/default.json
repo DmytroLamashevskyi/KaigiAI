@@ -3,7 +3,9 @@
   "identifier": "default",
   "description": "enables the default permissions",
   "windows": [
-    "main"
+    "main",
+    "present-a",
+    "present-b"
   ],
   "permissions": [
     "core:default"
