@@ -171,6 +171,16 @@ impl SttProvider for ApiProvider {
         if !resp.status().is_success() {
             let code = resp.status();
             let detail = resp.text().await.unwrap_or_default();
+            // A 404 on the transcription route usually means the provider has no
+            // speech-to-text endpoint at all (e.g. Gemini's OpenAI-compatible
+            // layer) — a common misconfiguration worth calling out explicitly.
+            if code == reqwest::StatusCode::NOT_FOUND {
+                return Err(format!(
+                    "endpoint not found (404) — this provider may not support speech \
+                     recognition. Gemini, for one, has no audio transcription endpoint; \
+                     use Groq or local whisper for speech. Details: {detail}"
+                ));
+            }
             return Err(format!("API error {code}: {detail}"));
         }
 

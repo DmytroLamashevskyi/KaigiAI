@@ -81,7 +81,12 @@ export interface Settings {
   appLanguage: LanguageCode;
   defaultLangA: LanguageCode;
   defaultLangB: LanguageCode;
-  providerMode: ProviderMode;
+  /** Where speech recognition runs. Independent from translation so a user can
+   *  pair local whisper with a cloud translator (e.g. Gemini, which has no STT
+   *  endpoint). Migrated from the old single `providerMode`. */
+  sttMode: ProviderMode;
+  /** Where translation/summary runs. */
+  translationMode: ProviderMode;
   apiBaseUrl: string;
   apiKey: string;
   sttModel: string;

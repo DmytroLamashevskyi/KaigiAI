@@ -55,13 +55,35 @@ pub trait TranslationProvider: Send + Sync {
     async fn summarize(&self, transcript: &str, lang: &str) -> ProviderResult<String>;
 }
 
-/// True when the stored settings select a usable API provider (mode == "api"
-/// with a base URL and key). Otherwise we fall back to the mock provider so the
-/// app stays functional without keys or local models.
-fn is_api(settings: &serde_json::Value) -> bool {
-    let s = |k: &str| settings.get(k).and_then(|v| v.as_str()).unwrap_or("");
-    s("providerMode") == "api" && !s("apiBaseUrl").is_empty() && !s("apiKey").is_empty()
+/// The mode of one pipeline stage ("local" or "api"). STT and translation are
+/// selected independently (`sttMode` / `translationMode`) so a user can run
+/// e.g. local whisper for speech but a cloud LLM for translation. Falls back to
+/// the legacy single `providerMode` for settings saved before the split, then
+/// to "local".
+fn stage_mode(settings: &serde_json::Value, mode_key: &str) -> String {
+    let s = |k: &str| settings.get(k).and_then(|v| v.as_str());
+    s(mode_key)
+        .or_else(|| s("providerMode"))
+        .unwrap_or("local")
+        .to_string()
 }
+
+/// Whether the API base URL + key are present (shared by both stages when either
+/// runs against a cloud endpoint).
+fn has_api_creds(settings: &serde_json::Value) -> bool {
+    let s = |k: &str| settings.get(k).and_then(|v| v.as_str()).unwrap_or("");
+    !s("apiBaseUrl").is_empty() && !s("apiKey").is_empty()
+}
+
+/// True when the given stage selects a usable API provider (mode == "api" with
+/// credentials). Otherwise the caller falls back to local or mock.
+fn is_api(settings: &serde_json::Value, mode_key: &str) -> bool {
+    stage_mode(settings, mode_key) == "api" && has_api_creds(settings)
+}
+
+/// Setting key naming each stage's mode.
+const STT_MODE: &str = "sttMode";
+const TRANSLATION_MODE: &str = "translationMode";
 
 fn api_from_settings(settings: &serde_json::Value) -> api::ApiProvider {
     let s = |k: &str| settings.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -86,10 +108,20 @@ pub const DEFAULT_LOCAL_LLM_URL: &str = "http://127.0.0.1:8770/v1";
 /// whisper.cpp server's native transcription route (server root, no `/v1`).
 pub const LOCAL_STT_ENDPOINT: &str = "inference";
 
-/// True when settings select on-device models (mode == "local"). The actual
-/// servers are user-installed and spawned as sidecars by the Tauri layer.
-fn is_local(settings: &serde_json::Value) -> bool {
-    settings.get("providerMode").and_then(|v| v.as_str()) == Some("local")
+/// True when the given stage selects on-device models (mode == "local"). The
+/// actual servers are user-installed and spawned as sidecars by the Tauri layer.
+fn is_local(settings: &serde_json::Value, mode_key: &str) -> bool {
+    stage_mode(settings, mode_key) == "local"
+}
+
+/// Whether speech recognition runs on a local whisper.cpp sidecar.
+pub fn stt_is_local(settings: &serde_json::Value) -> bool {
+    is_local(settings, STT_MODE)
+}
+
+/// Whether translation/summary runs on a local llama.cpp sidecar.
+pub fn translation_is_local(settings: &serde_json::Value) -> bool {
+    is_local(settings, TRANSLATION_MODE)
 }
 
 /// Build an ApiProvider for a local sidecar server (no API key needed). The STT
@@ -106,9 +138,9 @@ fn local_provider(settings: &serde_json::Value, base_url_key: &str, default_url:
 
 /// Select the translation/summary provider for the given settings blob.
 pub fn translation_from_settings(settings: &serde_json::Value) -> Box<dyn TranslationProvider> {
-    if is_local(settings) {
+    if is_local(settings, TRANSLATION_MODE) {
         Box::new(local_provider(settings, "localLlmBaseUrl", DEFAULT_LOCAL_LLM_URL))
-    } else if is_api(settings) {
+    } else if is_api(settings, TRANSLATION_MODE) {
         Box::new(api_from_settings(settings))
     } else {
         Box::new(mock::MockProvider)
@@ -117,9 +149,9 @@ pub fn translation_from_settings(settings: &serde_json::Value) -> Box<dyn Transl
 
 /// Select the speech-to-text provider for the given settings blob.
 pub fn stt_from_settings(settings: &serde_json::Value) -> Box<dyn SttProvider> {
-    if is_local(settings) {
+    if is_local(settings, STT_MODE) {
         Box::new(local_provider(settings, "localSttBaseUrl", DEFAULT_LOCAL_STT_URL))
-    } else if is_api(settings) {
+    } else if is_api(settings, STT_MODE) {
         Box::new(api_from_settings(settings))
     } else {
         Box::new(mock::MockProvider)

@@ -53,6 +53,7 @@ pub fn run() {
             commands::stop_recording,
             commands::is_recording,
             commands::list_audio_devices,
+            commands::open_url,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

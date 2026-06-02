@@ -354,6 +354,23 @@ RTX 3080 Ti Laptop, 16 ГБ → **Whisper large-v3 + Qwen2.5-7B-Instruct (Q5_K_M
 Groq (Whisper large-v3 + быстрые LLM), Gemini Flash, DeepL Free (перевод, есть JP),
 Cloudflare Workers AI, OpenRouter `:free`. Self-hosted LibreTranslate — офлайн-перевод.
 
+**Независимый выбор этапов (реализовано).** STT и перевод выбираются раздельно —
+`settings.sttMode` и `settings.translationMode` (каждый `local`/`api`). Это нужно,
+потому что **не все облачные провайдеры умеют распознавать речь**: у Gemini в
+OpenAI-совместимом слое есть `chat/completions` (перевод), но **нет
+`audio/transcriptions`** → запрос STT туда даёт `404`. Типичные связки:
+- локальный whisper + Gemini-перевод (есть GPU, но хочется качественный перевод);
+- Groq для всего (STT+LLM, бесплатный тир, без GPU);
+- полностью локально (whisper.cpp + llama.cpp).
+
+Детали: оба API-этапа делят **один** набор кред (`apiBaseUrl`/`apiKey`/`sttModel`/
+`llmModel`) — для разных облаков на двух этапах сразу пришлось бы хранить две пары
+кред (будущее расширение). `commands.rs` поднимает sidecar **только** для локальных
+этапов: whisper — если `sttMode=local`, llama — если `translationMode=local`. Старая
+настройка `providerMode` мигрируется в оба поля (`provider::stage_mode`,
+`AppState::migrateSettings`). В UI — два сегмент-переключателя; при API-STT показываем
+предупреждение, что Gemini речь не распознаёт.
+
 ### 10.4 Качество перевода и выбор модели (рекомендация)
 
 Приложение рассчитано на **много языковых пар** и распространение широкой аудитории,

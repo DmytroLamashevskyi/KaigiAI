@@ -875,7 +875,6 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
-  text-align: left;
   padding: 12px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
@@ -885,6 +884,16 @@
 .api-preset:hover {
   border-color: var(--accent);
   background: var(--bg-hover);
+}
+/* The card's clickable "select this provider" area (name + note). Separate from
+   the "Get key" link so the two aren't nested interactive elements. */
+.api-preset-select {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+  width: 100%;
 }
 .api-preset-name {
   font-size: 13.5px;
@@ -898,6 +907,8 @@
 }
 .api-key-link {
   margin-top: 4px;
+  padding: 0;
+  text-align: left;
   font-size: 12px;
   font-weight: 550;
   color: var(--accent);

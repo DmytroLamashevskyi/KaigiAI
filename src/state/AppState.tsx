@@ -10,6 +10,7 @@ import type {
   Conversation,
   Message,
   PendingSegment,
+  ProviderMode,
   Settings,
   View,
 } from "../types";
@@ -22,7 +23,8 @@ const DEFAULT_SETTINGS: Settings = {
   appLanguage: "ru",
   defaultLangA: "ru",
   defaultLangB: "en",
-  providerMode: "local",
+  sttMode: "local",
+  translationMode: "local",
   apiBaseUrl: "",
   apiKey: "",
   sttModel: "whisper-large-v3",
@@ -84,6 +86,16 @@ function makeId(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
+/** Carry forward settings saved before STT/translation were split: a single
+ *  `providerMode` becomes both `sttMode` and `translationMode`. */
+function migrateSettings(s: Partial<Settings>): Partial<Settings> {
+  const legacy = (s as { providerMode?: ProviderMode }).providerMode;
+  if (legacy && s.sttMode === undefined && s.translationMode === undefined) {
+    return { ...s, sttMode: legacy, translationMode: legacy };
+  }
+  return s;
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const backend = getBackend();
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -106,7 +118,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
         setConversations(data.conversations);
         setMessages(data.messages);
-        if (data.settings) setSettings((prev) => ({ ...prev, ...data.settings }));
+        if (data.settings)
+          setSettings((prev) => ({ ...prev, ...migrateSettings(data.settings!) }));
         setActiveId(data.conversations[0]?.id ?? null);
       })
       .catch((e) => console.error("bootstrap failed", e));

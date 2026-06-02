@@ -55,6 +55,9 @@ export interface Backend {
   startRecording(conversationId: string): Promise<void>;
   stopRecording(): Promise<void>;
   listAudioDevices(): Promise<string[]>;
+  // Open an external URL in the system browser. In the desktop shell a bare
+  // <a target=_blank> doesn't reach the OS browser, so links route through here.
+  openUrl(url: string): Promise<void>;
   // Subscribe to live transcript messages emitted while recording. The optional
   // `pendingId` identifies the §10.8 placeholder this message resolves. Returns
   // an unlisten function. No-op outside the desktop shell.
@@ -102,6 +105,7 @@ function tauriBackend(): Backend {
       invoke<void>("start_recording", { conversationId }),
     stopRecording: () => invoke<void>("stop_recording"),
     listAudioDevices: () => invoke<string[]>("list_audio_devices"),
+    openUrl: (url) => invoke<void>("open_url", { url }),
     onTranscriptMessage: (cb) =>
       listen<TranscriptPayload>("transcript-message", (e) =>
         cb(e.payload, e.payload.pendingId)
@@ -241,6 +245,10 @@ function localBackend(): Backend {
       Promise.reject(new Error("Recording is only available in the desktop app")),
     stopRecording: () => Promise.resolve(),
     listAudioDevices: () => Promise.resolve([]),
+    openUrl: (url) => {
+      window.open(url, "_blank", "noopener,noreferrer");
+      return Promise.resolve();
+    },
     onTranscriptMessage: () => Promise.resolve(() => {}),
     onRecordingError: () => Promise.resolve(() => {}),
     onSegmentSilence: () => Promise.resolve(() => {}),
@@ -258,7 +266,7 @@ function localBackend(): Backend {
 function usesApi(settings: Partial<Settings> | null): settings is Settings {
   return (
     !!settings &&
-    settings.providerMode === "api" &&
+    settings.translationMode === "api" &&
     !!settings.apiBaseUrl &&
     !!settings.apiKey
   );

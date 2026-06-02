@@ -92,12 +92,21 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
+/** Open an external URL in the system browser. A bare <a target=_blank> doesn't
+ *  reach the OS browser from the Tauri webview, so all external links go through
+ *  the backend `openUrl` command (browser fallback uses window.open). */
+function openExternal(url: string): void {
+  getBackend()
+    .openUrl(url)
+    .catch((e) => console.error("openUrl failed", e));
+}
+
 function DownloadHint({ link }: { link: DownloadLink }) {
   return (
     <div className="dl-hint">
-      <a className="api-key-link" href={link.url} target="_blank" rel="noreferrer">
+      <button type="button" className="api-key-link" onClick={() => openExternal(link.url)}>
         ↓ {link.label}
-      </a>
+      </button>
       <span className="field-hint">{link.note}</span>
     </div>
   );
@@ -124,7 +133,13 @@ function LangSelect({
 export default function Settings() {
   const { settings, updateSettings, closeSettings } = useApp();
   const t = useT();
-  const isApi = settings.providerMode === "api";
+  // STT and translation pick their backend independently (e.g. local whisper +
+  // cloud translator). The local-paths block shows whatever the local stages
+  // need; the API block shows once either stage is on a cloud endpoint.
+  const sttLocal = settings.sttMode === "local";
+  const translationLocal = settings.translationMode === "local";
+  const anyLocal = sttLocal || translationLocal;
+  const anyApi = !sttLocal || !translationLocal;
   const audioInputs = useAudioInputs();
 
   const fontOptions: { id: FontSize; label: string }[] = [
@@ -199,66 +214,100 @@ export default function Settings() {
         </Section>
 
         <Section title={t("settings.aiProvider")}>
-          <Field label={t("settings.mode")} hint={t("settings.modeHint")}>
+          <Field
+            label="Распознавание речи (STT)"
+            hint="Где распознаётся речь. Локально = whisper.cpp; API = Whisper-совместимый эндпоинт (напр. Groq)."
+          >
             <div className="seg">
               <button
-                className={"seg-opt" + (!isApi ? " active" : "")}
-                onClick={() => updateSettings({ providerMode: "local" })}
+                className={"seg-opt" + (sttLocal ? " active" : "")}
+                onClick={() => updateSettings({ sttMode: "local" })}
               >
                 💻 {t("settings.local")}
               </button>
               <button
-                className={"seg-opt" + (isApi ? " active" : "")}
-                onClick={() => updateSettings({ providerMode: "api" })}
+                className={"seg-opt" + (!sttLocal ? " active" : "")}
+                onClick={() => updateSettings({ sttMode: "api" })}
+              >
+                ☁ {t("settings.api")}
+              </button>
+            </div>
+          </Field>
+          <Field
+            label="Перевод"
+            hint="Где переводится текст. Локально = llama.cpp; API = облачная LLM (Gemini, Groq и т.п.)."
+          >
+            <div className="seg">
+              <button
+                className={"seg-opt" + (translationLocal ? " active" : "")}
+                onClick={() => updateSettings({ translationMode: "local" })}
+              >
+                💻 {t("settings.local")}
+              </button>
+              <button
+                className={"seg-opt" + (!translationLocal ? " active" : "")}
+                onClick={() => updateSettings({ translationMode: "api" })}
               >
                 ☁ {t("settings.api")}
               </button>
             </div>
           </Field>
 
-          {!isApi ? (
+          {anyLocal && (
             <>
               <p className="note-box">{t("settings.localServersHint")}</p>
-              <Field label="whisper-server" hint="Путь к серверу whisper.cpp (.exe)">
-                <input
-                  className="settings-input"
-                  value={settings.localWhisperServerPath}
-                  placeholder="C:\\whisper.cpp\\whisper-server.exe"
-                  onChange={(e) =>
-                    updateSettings({ localWhisperServerPath: e.target.value })
-                  }
-                />
-              </Field>
-              <DownloadHint link={LOCAL_DOWNLOADS.whisperServer} />
-              <Field label="Модель Whisper" hint="GGML .bin">
-                <input
-                  className="settings-input"
-                  value={settings.localWhisperPath}
-                  placeholder="C:\\models\\ggml-large-v3.bin"
-                  onChange={(e) => updateSettings({ localWhisperPath: e.target.value })}
-                />
-              </Field>
-              <DownloadHint link={LOCAL_DOWNLOADS.whisperModels} />
-              <Field label="llama-server" hint="Путь к серверу llama.cpp (.exe)">
-                <input
-                  className="settings-input"
-                  value={settings.localLlmServerPath}
-                  placeholder="C:\\llama.cpp\\llama-server.exe"
-                  onChange={(e) =>
-                    updateSettings({ localLlmServerPath: e.target.value })
-                  }
-                />
-              </Field>
-              <DownloadHint link={LOCAL_DOWNLOADS.llamaServer} />
-              <Field label="Модель LLM" hint="GGUF instruct-модель">
-                <input
-                  className="settings-input"
-                  value={settings.localLlmPath}
-                  placeholder="C:\\models\\qwen2.5-7b-instruct-q5_k_m.gguf"
-                  onChange={(e) => updateSettings({ localLlmPath: e.target.value })}
-                />
-              </Field>
-              <DownloadHint link={LOCAL_DOWNLOADS.llmModels} />
+              {sttLocal && (
+                <>
+                  <Field label="whisper-server" hint="Путь к серверу whisper.cpp (.exe)">
+                    <input
+                      className="settings-input"
+                      value={settings.localWhisperServerPath}
+                      placeholder="C:\\whisper.cpp\\whisper-server.exe"
+                      onChange={(e) =>
+                        updateSettings({ localWhisperServerPath: e.target.value })
+                      }
+                    />
+                  </Field>
+                  <DownloadHint link={LOCAL_DOWNLOADS.whisperServer} />
+                  <Field label="Модель Whisper" hint="GGML .bin">
+                    <input
+                      className="settings-input"
+                      value={settings.localWhisperPath}
+                      placeholder="C:\\models\\ggml-large-v3.bin"
+                      onChange={(e) =>
+                        updateSettings({ localWhisperPath: e.target.value })
+                      }
+                    />
+                  </Field>
+                  <DownloadHint link={LOCAL_DOWNLOADS.whisperModels} />
+                </>
+              )}
+              {translationLocal && (
+                <>
+                  <Field label="llama-server" hint="Путь к серверу llama.cpp (.exe)">
+                    <input
+                      className="settings-input"
+                      value={settings.localLlmServerPath}
+                      placeholder="C:\\llama.cpp\\llama-server.exe"
+                      onChange={(e) =>
+                        updateSettings({ localLlmServerPath: e.target.value })
+                      }
+                    />
+                  </Field>
+                  <DownloadHint link={LOCAL_DOWNLOADS.llamaServer} />
+                  <Field label="Модель LLM" hint="GGUF instruct-модель">
+                    <input
+                      className="settings-input"
+                      value={settings.localLlmPath}
+                      placeholder="C:\\models\\qwen2.5-7b-instruct-q5_k_m.gguf"
+                      onChange={(e) =>
+                        updateSettings({ localLlmPath: e.target.value })
+                      }
+                    />
+                  </Field>
+                  <DownloadHint link={LOCAL_DOWNLOADS.llmModels} />
+                </>
+              )}
               <Field label="Слои на GPU" hint="0 = только CPU">
                 <input
                   className="settings-input"
@@ -272,31 +321,33 @@ export default function Settings() {
               </Field>
               <p className="note-box">{t("settings.localNote")}</p>
             </>
-          ) : (
+          )}
+
+          {anyApi && (
             <>
               <div className="api-help">
                 <p className="api-help-title">{t("settings.apiQuickSetup")}</p>
                 <div className="api-presets">
                   {API_PROVIDERS.map((p) => (
-                    <button
-                      key={p.id}
-                      className="api-preset"
-                      onClick={() => updateSettings({ apiBaseUrl: p.baseUrl })}
-                    >
-                      <span className="api-preset-name">{p.name}</span>
-                      <span className="api-preset-note">{p.note}</span>
+                    <div key={p.id} className="api-preset">
+                      <button
+                        type="button"
+                        className="api-preset-select"
+                        onClick={() => updateSettings({ apiBaseUrl: p.baseUrl })}
+                      >
+                        <span className="api-preset-name">{p.name}</span>
+                        <span className="api-preset-note">{p.note}</span>
+                      </button>
                       {p.keyUrl && (
-                        <a
+                        <button
+                          type="button"
                           className="api-key-link"
-                          href={p.keyUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(e) => e.stopPropagation()}
+                          onClick={() => openExternal(p.keyUrl)}
                         >
                           {t("settings.getKey")}
-                        </a>
+                        </button>
                       )}
-                    </button>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -317,14 +368,36 @@ export default function Settings() {
                   onChange={(e) => updateSettings({ apiKey: e.target.value })}
                 />
               </Field>
-              <Field label={t("settings.modelName")}>
-                <input
-                  className="settings-input"
-                  value={settings.llmModel}
-                  placeholder="llama-3.3-70b-versatile"
-                  onChange={(e) => updateSettings({ llmModel: e.target.value })}
-                />
-              </Field>
+              {!sttLocal && (
+                <>
+                  <Field
+                    label="Модель распознавания (Whisper)"
+                    hint="Для Groq: whisper-large-v3"
+                  >
+                    <input
+                      className="settings-input"
+                      value={settings.sttModel}
+                      placeholder="whisper-large-v3"
+                      onChange={(e) => updateSettings({ sttModel: e.target.value })}
+                    />
+                  </Field>
+                  <p className="note-box warn">
+                    Распознавание речи по API есть только у провайдеров с Whisper
+                    (напр. Groq). Gemini его не поддерживает — используйте Gemini
+                    только для перевода, а речь распознавайте локально или через Groq.
+                  </p>
+                </>
+              )}
+              {!translationLocal && (
+                <Field label="Модель перевода (LLM)">
+                  <input
+                    className="settings-input"
+                    value={settings.llmModel}
+                    placeholder="llama-3.3-70b-versatile"
+                    onChange={(e) => updateSettings({ llmModel: e.target.value })}
+                  />
+                </Field>
+              )}
               <p className="note-box warn">{t("settings.apiNote")}</p>
             </>
           )}

@@ -15,10 +15,6 @@ fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
-fn is_local(settings: &serde_json::Value) -> bool {
-    settings.get("providerMode").and_then(|v| v.as_str()) == Some("local")
-}
-
 fn set_str(settings: &mut serde_json::Value, key: &str, val: String) {
     if let Some(obj) = settings.as_object_mut() {
         obj.insert(key.to_string(), serde_json::Value::String(val));
@@ -108,7 +104,7 @@ pub async fn translate_text(
 ) -> CmdResult<String> {
     let mut settings = db.get_app_settings().await.map_err(err)?;
     inject_api_key(&mut settings);
-    if is_local(&settings) {
+    if provider::translation_is_local(&settings) {
         let url = sidecars.ensure_llama(&settings)?;
         set_str(&mut settings, "localLlmBaseUrl", url);
     }
@@ -138,7 +134,7 @@ pub async fn summarize_conversation(
         .join("\n\n");
     let mut settings = db.get_app_settings().await.map_err(err)?;
     inject_api_key(&mut settings);
-    if is_local(&settings) {
+    if provider::translation_is_local(&settings) {
         let url = sidecars.ensure_llama(&settings)?;
         set_str(&mut settings, "localLlmBaseUrl", url);
     }
@@ -162,10 +158,15 @@ pub async fn start_recording(
         .ok_or_else(|| "conversation not found".to_string())?;
     let mut settings = db.get_app_settings().await.map_err(err)?;
     inject_api_key(&mut settings);
-    if is_local(&settings) {
+    // Spawn only the sidecars the chosen modes need: whisper for local STT,
+    // llama for local translation. A mixed setup (e.g. local speech + cloud
+    // translation) starts just one.
+    if provider::stt_is_local(&settings) {
         let stt = sidecars.ensure_whisper(&settings)?;
-        let llm = sidecars.ensure_llama(&settings)?;
         set_str(&mut settings, "localSttBaseUrl", stt);
+    }
+    if provider::translation_is_local(&settings) {
+        let llm = sidecars.ensure_llama(&settings)?;
         set_str(&mut settings, "localLlmBaseUrl", llm);
     }
     recorder.start(app, db.inner().clone(), conv, settings)
@@ -185,4 +186,40 @@ pub fn is_recording(recorder: State<'_, Recorder>) -> bool {
 #[tauri::command]
 pub fn list_audio_devices() -> Vec<String> {
     crate::audio::list_input_devices()
+}
+
+/// Open an external URL in the user's default browser. A bare `<a target=_blank>`
+/// in the Tauri webview doesn't reach the system browser, so the "Get key" /
+/// download links route through here. Restricted to http(s) so the command can't
+/// be coaxed into launching arbitrary files or programs.
+#[tauri::command]
+pub fn open_url(url: String) -> CmdResult<()> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("only http(s) URLs may be opened".into());
+    }
+    open_external(&url)
+}
+
+#[cfg(target_os = "windows")]
+fn open_external(url: &str) -> CmdResult<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    // `cmd /C start "" <url>` — the empty "" is start's title arg so a URL with
+    // spaces isn't mistaken for the window title.
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map(|_| ())
+        .map_err(err)
+}
+
+#[cfg(target_os = "macos")]
+fn open_external(url: &str) -> CmdResult<()> {
+    std::process::Command::new("open").arg(url).spawn().map(|_| ()).map_err(err)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_external(url: &str) -> CmdResult<()> {
+    std::process::Command::new("xdg-open").arg(url).spawn().map(|_| ()).map_err(err)
 }
