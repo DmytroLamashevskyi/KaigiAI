@@ -45,6 +45,11 @@ pub struct Message {
     pub start_ms: i64,
     pub end_ms: i64,
     pub created_at: i64,
+    /// Pipeline latency in ms: (message persisted) − (segment emitted by VAD),
+    /// i.e. how long STT + translation took (docs/PROJECT.md §10.8). `None` for
+    /// text messages and rows created before this column existed.
+    #[serde(default)]
+    pub processing_ms: Option<i64>,
 }
 
 /// One-shot snapshot used to hydrate the frontend on boot.
@@ -80,7 +85,8 @@ CREATE TABLE IF NOT EXISTS message (
   translated_text_b TEXT,
   start_ms        INTEGER NOT NULL,
   end_ms          INTEGER NOT NULL,
-  created_at      INTEGER NOT NULL
+  created_at      INTEGER NOT NULL,
+  processing_ms   INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_message_conv ON message(conversation_id);
 
@@ -148,6 +154,10 @@ impl Db {
         let _ = sqlx::query("ALTER TABLE message ADD COLUMN translated_text_b TEXT")
             .execute(&self.pool)
             .await;
+        // Speech→text pipeline latency in ms (§10.8).
+        let _ = sqlx::query("ALTER TABLE message ADD COLUMN processing_ms INTEGER")
+            .execute(&self.pool)
+            .await;
         Ok(())
     }
 
@@ -188,7 +198,7 @@ impl Db {
     pub async fn list_messages(&self, conversation_id: &str) -> Result<Vec<Message>, sqlx::Error> {
         sqlx::query_as::<_, Message>(
             "SELECT id, conversation_id, source, detected_lang, speaker, \
-             original_text, translated_text, translated_text_b, start_ms, end_ms, created_at \
+             original_text, translated_text, translated_text_b, start_ms, end_ms, created_at, processing_ms \
              FROM message WHERE conversation_id = ? ORDER BY created_at ASC",
         )
         .bind(conversation_id)
@@ -199,7 +209,7 @@ impl Db {
     async fn list_all_messages(&self) -> Result<Vec<Message>, sqlx::Error> {
         sqlx::query_as::<_, Message>(
             "SELECT id, conversation_id, source, detected_lang, speaker, \
-             original_text, translated_text, translated_text_b, start_ms, end_ms, created_at \
+             original_text, translated_text, translated_text_b, start_ms, end_ms, created_at, processing_ms \
              FROM message ORDER BY created_at ASC",
         )
         .fetch_all(&self.pool)
@@ -288,13 +298,14 @@ impl Db {
     pub async fn add_message(&self, m: &Message) -> Result<(), sqlx::Error> {
         sqlx::query(
             "INSERT INTO message (id, conversation_id, source, detected_lang, speaker, \
-             original_text, translated_text, translated_text_b, start_ms, end_ms, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             original_text, translated_text, translated_text_b, start_ms, end_ms, created_at, processing_ms) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(id) DO UPDATE SET \
              detected_lang = excluded.detected_lang, \
              original_text = excluded.original_text, \
              translated_text = excluded.translated_text, \
-             translated_text_b = excluded.translated_text_b",
+             translated_text_b = excluded.translated_text_b, \
+             processing_ms = excluded.processing_ms",
         )
         .bind(&m.id)
         .bind(&m.conversation_id)
@@ -307,6 +318,7 @@ impl Db {
         .bind(m.start_ms)
         .bind(m.end_ms)
         .bind(m.created_at)
+        .bind(m.processing_ms)
         .execute(&self.pool)
         .await?;
         self.touch_conversation(&m.conversation_id, m.created_at).await?;
@@ -385,6 +397,7 @@ mod tests {
             translated_text_b: None,
             start_ms: 0,
             end_ms: 0,
+            processing_ms: None,
             created_at: ts,
         }
     }

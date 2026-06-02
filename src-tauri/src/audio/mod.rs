@@ -7,5 +7,5 @@ pub mod vad;
 pub mod wav;
 
 pub use capture::{list_input_devices, AudioCapture, AudioSource};
-pub use vad::{VadConfig, SAMPLE_RATE};
+pub use vad::{VadConfig, VadEvent, SAMPLE_RATE};
 pub use wav::encode_wav_pcm16;

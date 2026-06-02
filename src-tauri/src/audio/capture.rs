@@ -10,7 +10,7 @@ use std::thread::{self, JoinHandle};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, StreamConfig};
 
-use super::vad::{Vad, VadConfig, SAMPLE_RATE};
+use super::vad::{Vad, VadConfig, VadEvent, SAMPLE_RATE};
 
 /// Where to capture audio from.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -40,16 +40,17 @@ pub struct AudioCapture {
 impl AudioCapture {
     /// Start capturing. For `Mic`, `device_name` selects an input by name
     /// (`None` = default input). For `System`, audio is captured via loopback on
-    /// the default output device (`device_name` is ignored). `on_segment` is
-    /// invoked from the worker thread with mono 16 kHz samples per utterance.
+    /// the default output device (`device_name` is ignored). `on_event` is
+    /// invoked from the worker thread with each [`VadEvent`] (live pause/abort
+    /// signals plus finalized segments of mono 16 kHz samples).
     pub fn start<F>(
         source: AudioSource,
         device_name: Option<&str>,
         vad_cfg: VadConfig,
-        on_segment: F,
+        on_event: F,
     ) -> Result<Self, String>
     where
-        F: FnMut(Vec<f32>) + Send + 'static,
+        F: FnMut(VadEvent) + Send + 'static,
     {
         // System audio uses the output endpoint in loopback mode; its format must
         // come from `default_output_config`, but we still build an *input* stream.
@@ -77,7 +78,7 @@ impl AudioCapture {
         // Audio thread -> worker thread: mono samples at the device rate.
         let (tx, rx): (Sender<Vec<f32>>, Receiver<Vec<f32>>) = mpsc::channel();
 
-        let worker = spawn_worker(rx, in_rate, vad_cfg, on_segment);
+        let worker = spawn_worker(rx, in_rate, vad_cfg, on_event);
 
         let err_fn = |e| log::error!("audio stream error: {e}");
         let stream = match sample_format {
@@ -157,22 +158,23 @@ fn spawn_worker<F>(
     rx: Receiver<Vec<f32>>,
     in_rate: u32,
     vad_cfg: VadConfig,
-    mut on_segment: F,
+    mut on_event: F,
 ) -> JoinHandle<()>
 where
-    F: FnMut(Vec<f32>) + Send + 'static,
+    F: FnMut(VadEvent) + Send + 'static,
 {
     thread::spawn(move || {
         let mut vad = Vad::new(vad_cfg);
         let mut resampler = LinearResampler::new(in_rate, SAMPLE_RATE);
         while let Ok(chunk) = rx.recv() {
             let resampled = resampler.process(&chunk);
-            for segment in vad.push(&resampled) {
-                on_segment(segment);
+            for event in vad.push(&resampled) {
+                on_event(event);
             }
         }
+        // Capture stopped: emit any in-progress utterance as a final segment.
         if let Some(tail) = vad.flush() {
-            on_segment(tail);
+            on_event(VadEvent::Segment(tail));
         }
     })
 }

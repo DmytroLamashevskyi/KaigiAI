@@ -3,6 +3,27 @@ import { listen } from "@tauri-apps/api/event";
 import type { Conversation, Message, Settings } from "../types";
 import { MOCK_CONVERSATIONS, MOCK_MESSAGES } from "../data/mock";
 
+/** A finished transcript message carries the `pendingId` of the placeholder it
+ *  resolves (§10.8); undefined for paths that never raised one. */
+export interface TranscriptPayload extends Message {
+  pendingId?: number;
+}
+
+/** Payload of the `segment-silence` event: speech paused; the UI fills a bar
+ *  over `hangoverMs` and aborts it if the speaker resumes (§10.8). */
+export interface SegmentSilencePayload {
+  pendingId: number;
+  conversationId: string;
+  hangoverMs: number;
+}
+
+/** Payload of the `segment-pending` event: the pause elapsed and the segment is
+ *  now in STT/translation (the placeholder switches to a processing shimmer). */
+export interface SegmentPendingPayload {
+  pendingId: number;
+  conversationId: string;
+}
+
 export interface BootstrapData {
   conversations: Conversation[];
   messages: Record<string, Message[]>;
@@ -34,12 +55,25 @@ export interface Backend {
   startRecording(conversationId: string): Promise<void>;
   stopRecording(): Promise<void>;
   listAudioDevices(): Promise<string[]>;
-  // Subscribe to live transcript messages emitted while recording. Returns an
-  // unlisten function. No-op outside the desktop shell.
-  onTranscriptMessage(cb: (m: Message) => void): Promise<() => void>;
+  // Subscribe to live transcript messages emitted while recording. The optional
+  // `pendingId` identifies the §10.8 placeholder this message resolves. Returns
+  // an unlisten function. No-op outside the desktop shell.
+  onTranscriptMessage(
+    cb: (m: Message, pendingId?: number) => void
+  ): Promise<() => void>;
   // Subscribe to non-fatal recording errors (STT/translation failures) surfaced
   // as a toast. Returns an unlisten function. No-op outside the desktop shell.
   onRecordingError(cb: (message: string) => void): Promise<() => void>;
+  // Speech paused (§10.8): raise a silence-countdown bar that fills over
+  // `hangoverMs`. Returns an unlisten function. No-op outside the desktop shell.
+  onSegmentSilence(cb: (p: SegmentSilencePayload) => void): Promise<() => void>;
+  // A segment finalized and entered STT/translation (§10.8): switch the
+  // placeholder to a processing shimmer. Returns an unlisten function. No-op
+  // outside the desktop shell.
+  onSegmentPending(cb: (p: SegmentPendingPayload) => void): Promise<() => void>;
+  // A pending segment yielded no usable text (error/empty/noise): drop its
+  // placeholder. Returns an unlisten function. No-op outside the desktop shell.
+  onSegmentCancelled(cb: (pendingId: number) => void): Promise<() => void>;
 }
 
 // --- Tauri backend (desktop, SQLite via Rust core) ---------------------------
@@ -69,9 +103,19 @@ function tauriBackend(): Backend {
     stopRecording: () => invoke<void>("stop_recording"),
     listAudioDevices: () => invoke<string[]>("list_audio_devices"),
     onTranscriptMessage: (cb) =>
-      listen<Message>("transcript-message", (e) => cb(e.payload)),
+      listen<TranscriptPayload>("transcript-message", (e) =>
+        cb(e.payload, e.payload.pendingId)
+      ),
     onRecordingError: (cb) =>
       listen<string>("recording-error", (e) => cb(e.payload)),
+    onSegmentSilence: (cb) =>
+      listen<SegmentSilencePayload>("segment-silence", (e) => cb(e.payload)),
+    onSegmentPending: (cb) =>
+      listen<SegmentPendingPayload>("segment-pending", (e) => cb(e.payload)),
+    onSegmentCancelled: (cb) =>
+      listen<{ pendingId: number }>("segment-cancelled", (e) =>
+        cb(e.payload.pendingId)
+      ),
   };
 }
 
@@ -199,6 +243,9 @@ function localBackend(): Backend {
     listAudioDevices: () => Promise.resolve([]),
     onTranscriptMessage: () => Promise.resolve(() => {}),
     onRecordingError: () => Promise.resolve(() => {}),
+    onSegmentSilence: () => Promise.resolve(() => {}),
+    onSegmentPending: () => Promise.resolve(() => {}),
+    onSegmentCancelled: () => Promise.resolve(() => {}),
   };
 }
 

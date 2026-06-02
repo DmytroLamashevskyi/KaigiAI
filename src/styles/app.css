@@ -500,6 +500,59 @@
   padding-top: 12px;
 }
 
+/* In-flight placeholder (§10.8): one thin bar spanning the full chat width.
+   The `silence` phase sweeps a fill across it over the hangover window (the live
+   "have they stopped talking?" countdown); if speech resumes the row is removed.
+   The `processing` phase is an indeterminate shimmer while STT/translation run. */
+.pending-row {
+  display: block;
+  padding: 4px 4px;
+}
+.pending-bar {
+  position: relative;
+  height: 4px;
+  width: 100%;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.pending-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+/* Silence countdown: fill grows 0→100% across the hangover duration. The inline
+   style sets animation-duration (hangoverMs) and a negative delay to resume
+   mid-countdown for a placeholder that mounts late. */
+.pending-bar.silence .pending-bar-fill {
+  width: 100%;
+  transform-origin: left center;
+  animation: pending-countdown linear forwards;
+}
+@keyframes pending-countdown {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+/* Processing: an indeterminate sliver sliding left→right. */
+.pending-bar.processing .pending-bar-fill {
+  width: 40%;
+  opacity: 0.7;
+  animation: pending-shimmer 1.1s ease-in-out infinite;
+}
+@keyframes pending-shimmer {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(275%);
+  }
+}
+
 /* Foreign-language utterance (spoken outside the conversation pair, §10.7 var.A):
    the original spans the full width with a language badge, the two translations
    sit underneath in the usual A | time | B grid. */
@@ -688,6 +741,23 @@
   color: var(--text-primary);
   font-size: 13.5px;
   outline: none;
+}
+/* Range slider (e.g. silence duration §10.8): track + live value readout. */
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.settings-range {
+  width: 220px;
+  max-width: 100%;
+  accent-color: var(--accent);
+}
+.slider-value {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 42px;
 }
 .settings-select {
   appearance: none;

@@ -24,6 +24,24 @@ export interface Message {
   startMs: number; // offset from recording start
   endMs: number;
   createdAt: number;
+  /** Speech→text pipeline latency in ms (STT + translation), §10.8. Absent for
+   *  text messages and rows created before the feature existed. */
+  processingMs?: number | null;
+}
+
+/** A placeholder row in the transcript while an utterance settles (§10.8).
+ *  Lifecycle: `silence` (the speaker paused — a bar fills over `hangoverMs`; if
+ *  they resume in time the segment-cancelled event drops it) → `processing`
+ *  (the pause elapsed, STT/translation are running — a shimmer) → replaced by
+ *  the real message, or cancelled. */
+export interface PendingSegment {
+  pendingId: number;
+  conversationId: string;
+  phase: "silence" | "processing";
+  /** Hangover duration the silence bar should fill over (ms); silence phase only. */
+  hangoverMs?: number;
+  /** Wall-clock ms when the current phase began, so the CSS bar can be anchored. */
+  since: number;
 }
 
 export interface Conversation {
@@ -76,6 +94,13 @@ export interface Settings {
   nGpuLayers: number; // layers offloaded to GPU; 0 = CPU-only
   audioDevice: string; // empty = system default
   audioSource: AudioSource;
+  /** Visible countdown of the silence bar (ms), 500–3000. A fixed ~1.5 s grace
+   *  precedes it; total hangover = grace + this (§10.8). */
+  silenceMs: number;
+  /** Allow utterances in a third language (outside the pair) to be detected and
+   *  shown as full-width "foreign" rows (§10.7 variant A). Off → every utterance
+   *  is forced onto langA/langB, avoiding spurious mislabelled rows. */
+  detectForeignLanguages: boolean;
   saveAudio: boolean;
   fontSize: FontSize;
   theme: "light" | "dark";

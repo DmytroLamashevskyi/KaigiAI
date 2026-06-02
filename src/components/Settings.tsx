@@ -363,6 +363,42 @@ export default function Settings() {
               </select>
             </Field>
           )}
+          <Field
+            label="Отсчёт до перевода"
+            hint="После ~1,5 с тишины появляется полоска и отсчитывает это время до перевода фразы (0,5–3 с). Короткие паузы внутри речи её не показывают."
+          >
+            <div className="slider-row">
+              <input
+                type="range"
+                className="settings-range"
+                min={500}
+                max={3000}
+                step={100}
+                value={settings.silenceMs}
+                onChange={(e) =>
+                  updateSettings({ silenceMs: Number(e.target.value) })
+                }
+              />
+              <span className="slider-value">
+                {(settings.silenceMs / 1000).toFixed(1)} с
+              </span>
+            </div>
+          </Field>
+          <Field
+            label="Определять третий язык"
+            hint="Выкл — речь всегда относится к одному из двух языков беседы (надёжнее, без ложных строк). Включи, только если реально говорят на третьем языке."
+          >
+            <button
+              className={"switch" + (settings.detectForeignLanguages ? " on" : "")}
+              onClick={() =>
+                updateSettings({
+                  detectForeignLanguages: !settings.detectForeignLanguages,
+                })
+              }
+            >
+              <span className="switch-knob" />
+            </button>
+          </Field>
           <Field label={t("settings.saveAudio")} hint={t("settings.saveAudioHint")}>
             <button
               className={"switch" + (settings.saveAudio ? " on" : "")}

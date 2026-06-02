@@ -9,6 +9,7 @@ import {
 import type {
   Conversation,
   Message,
+  PendingSegment,
   Settings,
   View,
 } from "../types";
@@ -34,6 +35,8 @@ const DEFAULT_SETTINGS: Settings = {
   nGpuLayers: 0,
   audioDevice: "",
   audioSource: "mic",
+  silenceMs: 3000,
+  detectForeignLanguages: false,
   saveAudio: false,
   fontSize: "medium",
   theme: "light",
@@ -49,6 +52,9 @@ interface AppContextValue {
   error: string | null;
   activeConversation: Conversation | null;
   activeMessages: Message[];
+  /** In-flight segments for the active conversation, shown as live-timer
+   *  placeholders below the transcript (§10.8). */
+  activePending: PendingSegment[];
   toggleRecording: () => void;
   dismissError: () => void;
   selectConversation: (id: string) => void;
@@ -88,6 +94,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  // In-flight segments (§10.8): keyed implicitly by pendingId. Cleared when the
+  // finished message arrives (by pendingId) or the segment is cancelled.
+  const [pending, setPending] = useState<PendingSegment[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -111,13 +120,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     backend
-      .onTranscriptMessage((m) => {
+      .onTranscriptMessage((m, pendingId) => {
         setMessages((prev) => {
           const list = prev[m.conversationId] ?? [];
           const i = list.findIndex((x) => x.id === m.id);
           const next = i >= 0 ? list.map((x) => (x.id === m.id ? m : x)) : [...list, m];
           return { ...prev, [m.conversationId]: next };
         });
+        // The real row replaces its in-flight placeholder (§10.8).
+        if (pendingId !== undefined) {
+          setPending((prev) => prev.filter((p) => p.pendingId !== pendingId));
+        }
         setConversations((prev) =>
           prev.map((c) =>
             c.id === m.conversationId ? { ...c, updatedAt: m.createdAt } : c
@@ -153,6 +166,67 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, [backend]);
 
+  // Live placeholders (§10.8). A pause raises a "silence" bar that fills over
+  // `hangoverMs`; if the speaker resumes it's cancelled, otherwise it flips to
+  // a "processing" shimmer until the real message (or a cancel) arrives.
+  useEffect(() => {
+    let unlistenSilence: (() => void) | undefined;
+    let unlistenPending: (() => void) | undefined;
+    let unlistenCancelled: (() => void) | undefined;
+    let cancelled = false;
+    // Insert or update the placeholder for `pendingId`, restarting the phase
+    // clock so the CSS bar animates from the new phase's start.
+    const upsert = (next: PendingSegment) =>
+      setPending((prev) => {
+        const i = prev.findIndex((p) => p.pendingId === next.pendingId);
+        if (i < 0) return [...prev, next];
+        const copy = prev.slice();
+        copy[i] = next;
+        return copy;
+      });
+    backend
+      .onSegmentSilence((p) => {
+        upsert({
+          pendingId: p.pendingId,
+          conversationId: p.conversationId,
+          phase: "silence",
+          hangoverMs: p.hangoverMs,
+          since: Date.now(),
+        });
+      })
+      .then((fn) => (cancelled ? fn() : (unlistenSilence = fn)))
+      .catch((e) => console.error("segment-silence subscription failed", e));
+    backend
+      .onSegmentPending((p) => {
+        upsert({
+          pendingId: p.pendingId,
+          conversationId: p.conversationId,
+          phase: "processing",
+          since: Date.now(),
+        });
+      })
+      .then((fn) => (cancelled ? fn() : (unlistenPending = fn)))
+      .catch((e) => console.error("segment-pending subscription failed", e));
+    backend
+      .onSegmentCancelled((pendingId) => {
+        setPending((prev) => prev.filter((p) => p.pendingId !== pendingId));
+      })
+      .then((fn) => (cancelled ? fn() : (unlistenCancelled = fn)))
+      .catch((e) => console.error("segment-cancelled subscription failed", e));
+    return () => {
+      cancelled = true;
+      unlistenSilence?.();
+      unlistenPending?.();
+      unlistenCancelled?.();
+    };
+  }, [backend]);
+
+  // Stop leaves no segment in flight; clear any stragglers so a stale
+  // placeholder never lingers after recording ends.
+  useEffect(() => {
+    if (!recording) setPending([]);
+  }, [recording]);
+
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", settings.theme);
   }, [settings.theme]);
@@ -166,6 +240,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const activeConversation =
       conversations.find((c) => c.id === activeId) ?? null;
     const activeMessages = activeId ? messages[activeId] ?? [] : [];
+    const activePending = activeId
+      ? pending.filter((p) => p.conversationId === activeId)
+      : [];
 
     return {
       conversations,
@@ -177,6 +254,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       error,
       activeConversation,
       activeMessages,
+      activePending,
       toggleRecording: () => {
         if (!activeId) return;
         if (recording) {
@@ -395,7 +473,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         URL.revokeObjectURL(url);
       },
     };
-  }, [backend, conversations, messages, activeId, view, settings, recording, error, summaryOpen]);
+  }, [backend, conversations, messages, activeId, view, settings, recording, error, summaryOpen, pending]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
