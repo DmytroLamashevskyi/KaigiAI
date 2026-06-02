@@ -114,6 +114,16 @@ export interface Settings {
   saveAudio: boolean;
   fontSize: FontSize;
   theme: "light" | "dark";
+  /** Set once the first-run setup wizard has been completed/dismissed, so it
+   *  doesn't auto-open again. */
+  onboarded: boolean;
+}
+
+/** One unmet setup requirement for the current mode (from the readiness check),
+ *  used by the "needs setup" banner and the first-run wizard. */
+export interface SetupIssue {
+  field: string;
+  message: string;
 }
 
 export type View = "transcript" | "settings";

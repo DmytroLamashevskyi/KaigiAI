@@ -12,6 +12,7 @@ import type {
   Message,
   PendingSegment,
   Settings,
+  SetupIssue,
   View,
 } from "../types";
 import { speakerMap } from "../types";
@@ -51,6 +52,7 @@ const DEFAULT_SETTINGS: Settings = {
   saveAudio: false,
   fontSize: "medium",
   theme: "light",
+  onboarded: false,
 };
 
 interface AppContextValue {
@@ -67,6 +69,15 @@ interface AppContextValue {
   /** Transient success/info message (e.g. "saved to …"), shown as a toast. */
   notice: string | null;
   dismissNotice: () => void;
+  /** Unmet setup requirements for the current mode (empty = ready). */
+  setupIssues: SetupIssue[];
+  recheckSetup: () => void;
+  /** First-run setup wizard visibility + controls. */
+  wizardOpen: boolean;
+  openWizard: () => void;
+  closeWizard: () => void;
+  /** Mark onboarding done and close the wizard. */
+  finishOnboarding: () => void;
   activeConversation: Conversation | null;
   activeMessages: Message[];
   /** In-flight segments for the active conversation, shown as live-timer
@@ -122,6 +133,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [exportId, setExportId] = useState<string | null>(null);
+  const [setupIssues, setSetupIssues] = useState<SetupIssue[]>([]);
+  const [wizardOpen, setWizardOpen] = useState(false);
   // In-flight segments (§10.8): keyed implicitly by pendingId. Cleared when the
   // finished message arrives (by pendingId) or the segment is cancelled.
   const [pending, setPending] = useState<PendingSegment[]>([]);
@@ -135,6 +148,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ),
     []
   );
+
+  // Re-run the readiness check (after settings change, or wizard steps).
+  const recheckSetup = useCallback(() => {
+    backend.checkSetup().then(setSetupIssues).catch(logErr("checkSetup failed"));
+  }, [backend]);
 
   useEffect(() => {
     let cancelled = false;
@@ -163,6 +181,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
               if (!cancelled) setPreparing(false);
             });
         }
+        // Readiness: surface missing config and open the first-run wizard when
+        // setup is incomplete and the user hasn't onboarded yet. A complete
+        // setup is silently marked onboarded so the wizard never nags.
+        backend
+          .checkSetup()
+          .then((issues) => {
+            if (cancelled) return;
+            setSetupIssues(issues);
+            if (issues.length === 0) {
+              if (!merged.onboarded) {
+                const next = { ...merged, onboarded: true };
+                setSettings(next);
+                backend.saveSettings(next).catch(logErr("saveSettings failed"));
+              }
+            } else if (!merged.onboarded) {
+              setWizardOpen(true);
+            }
+          })
+          .catch(logErr("checkSetup failed"));
       })
       .catch(logErr("bootstrap failed"));
     return () => {
@@ -220,6 +257,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       error,
       notice,
       dismissNotice: () => setNotice(null),
+      setupIssues,
+      recheckSetup,
+      wizardOpen,
+      openWizard: () => setWizardOpen(true),
+      closeWizard: () => setWizardOpen(false),
+      finishOnboarding: () => {
+        const next = { ...settings, onboarded: true };
+        setSettings(next);
+        backend.saveSettings(next).catch(logErr("saveSettings failed"));
+        setWizardOpen(false);
+        recheckSetup();
+      },
       activeConversation,
       activeMessages,
       activePending,
@@ -277,7 +326,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateSettings: (patch) => {
         const next = { ...settings, ...patch };
         setSettings(next);
-        backend.saveSettings(next).catch(logErr("saveSettings failed"));
+        backend
+          .saveSettings(next)
+          .then(recheckSetup)
+          .catch(logErr("saveSettings failed"));
       },
       setConversationLangs: (langA, langB) => {
         if (!activeId) return;
@@ -455,7 +507,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       },
     };
-  }, [backend, patchConversation, conversations, messages, activeId, view, settings, recording, preparing, error, notice, summaryOpen, exportId, pending]);
+  }, [backend, patchConversation, recheckSetup, conversations, messages, activeId, view, settings, recording, preparing, error, notice, summaryOpen, exportId, setupIssues, wizardOpen, pending]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

@@ -5,13 +5,34 @@ import TranscriptView from "./components/TranscriptView";
 import Settings from "./components/Settings";
 import SummaryModal from "./components/SummaryModal";
 import ExportModal from "./components/ExportModal";
+import SetupWizard from "./components/SetupWizard";
 import PresentBroadcaster from "./present/PresentBroadcaster";
 import "./styles/app.css";
+
+/** Persistent red banner when the current mode is missing configuration, with a
+ *  one-click jump into the setup wizard. Hidden while the wizard is open. */
+function SetupBanner() {
+  const { setupIssues, wizardOpen, openWizard } = useApp();
+  if (wizardOpen || setupIssues.length === 0) return null;
+  return (
+    <div className="setup-banner" role="alert">
+      <span className="setup-banner-icon">⚠</span>
+      <div className="setup-banner-text">
+        <strong>Требуется настройка.</strong>{" "}
+        {setupIssues.map((i) => i.message).join("; ")}
+      </div>
+      <button className="setup-banner-btn" onClick={openWizard}>
+        Настроить
+      </button>
+    </div>
+  );
+}
 
 function MainArea() {
   const { view } = useApp();
   return (
     <main className="main">
+      <SetupBanner />
       {view === "settings" ? <Settings /> : <TranscriptView />}
     </main>
   );
@@ -66,6 +87,7 @@ export default function App() {
       <NoticeToast />
       <SummaryModal />
       <ExportModal />
+      <SetupWizard />
       <PresentBroadcaster />
     </AppProvider>
   );

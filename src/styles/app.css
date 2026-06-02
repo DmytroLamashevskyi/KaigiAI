@@ -1386,3 +1386,139 @@
   color: var(--text-muted);
   font-size: calc(22px * var(--present-scale, 1));
 }
+
+/* ---- First-run setup: banner + wizard (onboarding) ---- */
+.setup-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  background: #fdecec;
+  border-bottom: 1px solid #f3c0c0;
+  color: #8a1f1f;
+}
+[data-theme="dark"] .setup-banner {
+  background: #3a1d1d;
+  border-color: #6b2e2e;
+  color: #f4c7c7;
+}
+.setup-banner-icon {
+  font-size: 16px;
+}
+.setup-banner-text {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.setup-banner-btn {
+  flex: 0 0 auto;
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  font-size: 13px;
+}
+.setup-banner-btn:hover {
+  background: var(--accent-hover);
+}
+
+.settings-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.wizard-open-btn {
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--accent);
+  background: var(--bg-hover);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13px;
+}
+.wizard-open-btn:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.wizard-modal {
+  width: min(640px, 100%);
+}
+.wizard-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.wizard-lead {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-primary);
+}
+.wizard-step-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-top: 6px;
+}
+.wizard-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: -6px;
+}
+.wiz-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wiz-field-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-primary);
+}
+.wiz-ok {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #1f7a3a;
+}
+.wiz-bad {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #b5573a;
+}
+.wizard-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.wizard-remaining {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.wiz-primary {
+  padding: 9px 18px;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.wiz-primary:hover {
+  background: var(--accent-hover);
+}
+.wiz-secondary {
+  padding: 9px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-weight: 550;
+}
+.wiz-secondary:hover {
+  background: var(--bg-hover);
+}

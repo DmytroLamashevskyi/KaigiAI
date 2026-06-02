@@ -58,6 +58,8 @@ pub fn run() {
             commands::list_audio_devices,
             commands::open_url,
             commands::open_present_window,
+            commands::check_setup,
+            commands::path_exists,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

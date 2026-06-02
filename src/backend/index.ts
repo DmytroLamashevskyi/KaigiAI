@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Conversation, Message, Settings } from "../types";
+import type { Conversation, Message, Settings, SetupIssue } from "../types";
 import { MOCK_CONVERSATIONS, MOCK_MESSAGES } from "../data/mock";
 
 /** A finished transcript message carries the `pendingId` of the placeholder it
@@ -67,6 +67,11 @@ export interface Backend {
   // Pre-start the local sidecar servers the current settings need (no-op for
   // cloud-only setups / browser). Resolves once they're ready.
   warmupServers(): Promise<void>;
+  // Readiness check: what's still missing/invalid for the current mode. Empty
+  // array = ready. Drives the setup banner and first-run wizard.
+  checkSetup(): Promise<SetupIssue[]>;
+  // Whether a file/dir exists (live green-check next to path fields).
+  pathExists(path: string): Promise<boolean>;
   // Open (or focus) the standalone presentation window for one side. In the
   // desktop app this creates a native Tauri window; the browser falls back to
   // window.open.
@@ -126,6 +131,8 @@ function tauriBackend(): Backend {
       invoke<void>("start_recording", { conversationId }),
     stopRecording: () => invoke<void>("stop_recording"),
     warmupServers: () => invoke<void>("warmup_servers"),
+    checkSetup: () => invoke<SetupIssue[]>("check_setup"),
+    pathExists: (path) => invoke<boolean>("path_exists", { path }),
     openPresent: (side) => invoke<void>("open_present_window", { side }),
     listAudioDevices: () => invoke<string[]>("list_audio_devices"),
     openUrl: (url) => invoke<void>("open_url", { url }),
@@ -276,6 +283,9 @@ function localBackend(): Backend {
       Promise.reject(new Error("Recording is only available in the desktop app")),
     stopRecording: () => Promise.resolve(),
     warmupServers: () => Promise.resolve(),
+    // The browser can't inspect the filesystem; assume ready (mock/echo works).
+    checkSetup: () => Promise.resolve([]),
+    pathExists: (path) => Promise.resolve(!!path.trim()),
     openPresent: (side) => {
       window.open(`?present=${side}`, `kaigiPresent${side}`, "width=900,height=660");
       return Promise.resolve();

@@ -231,6 +231,63 @@ fn sanitize_filename(name: &str) -> String {
     if trimmed.is_empty() { "conversation".to_string() } else { trimmed.to_string() }
 }
 
+/// One thing the user still needs to set up before recording will work.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupIssue {
+    /// The settings field this is about (so the UI can deep-link).
+    field: String,
+    message: String,
+}
+
+/// Inspect the saved settings and report what's missing/invalid for the current
+/// mode, so the UI can show a "needs setup" banner and the first-run wizard can
+/// validate. Empty result = ready to record.
+#[tauri::command]
+pub async fn check_setup(db: State<'_, Db>) -> CmdResult<Vec<SetupIssue>> {
+    let mut settings = db.get_app_settings().await.map_err(err)?;
+    inject_api_key(&mut settings);
+    let s = |k: &str| settings.get(k).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let mut issues = Vec::new();
+    let mut add = |field: &str, message: String| issues.push(SetupIssue { field: field.into(), message });
+
+    let stt_local = provider::stt_is_local(&settings);
+    let tr_local = provider::translation_is_local(&settings);
+
+    // Any cloud stage needs an endpoint + key.
+    if !stt_local || !tr_local {
+        if s("apiBaseUrl").is_empty() {
+            add("apiBaseUrl", "Не указан адрес API (base URL)".into());
+        }
+        if s("apiKey").is_empty() {
+            add("apiKey", "Не указан API-ключ".into());
+        }
+    }
+    let mut check_file = |path: String, label: &str, field: &str| {
+        if path.is_empty() {
+            add(field, format!("Не указан путь: {label}"));
+        } else if !std::path::Path::new(&path).exists() {
+            add(field, format!("Файл не найден: {label}"));
+        }
+    };
+    if stt_local {
+        check_file(s("localWhisperServerPath"), "whisper-server (.exe)", "localWhisperServerPath");
+        check_file(s("localWhisperPath"), "модель Whisper", "localWhisperPath");
+    }
+    if tr_local {
+        check_file(s("localLlmServerPath"), "llama-server (.exe)", "localLlmServerPath");
+        check_file(s("localLlmPath"), "модель LLM", "localLlmPath");
+    }
+    Ok(issues)
+}
+
+/// Whether a file/dir exists — drives the live green-check next to path fields.
+#[tauri::command]
+pub fn path_exists(path: String) -> bool {
+    let p = path.trim();
+    !p.is_empty() && std::path::Path::new(p).exists()
+}
+
 #[tauri::command]
 pub async fn start_recording(
     app: AppHandle,

@@ -8,7 +8,7 @@ import AudioSection from "./settings/AudioSection";
 /** Settings screen shell — composes the section components, each of which reads
  *  `settings`/`updateSettings` from the app context directly. */
 export default function Settings() {
-  const { closeSettings } = useApp();
+  const { closeSettings, openWizard } = useApp();
   const t = useT();
 
   return (
@@ -16,9 +16,14 @@ export default function Settings() {
       <div className="settings-header">
         <div className="settings-header-inner">
           <h1>{t("settings.title")}</h1>
-          <button className="close-btn" onClick={closeSettings}>
-            ✕
-          </button>
+          <div className="settings-header-actions">
+            <button className="wizard-open-btn" onClick={openWizard}>
+              ✦ Мастер настройки
+            </button>
+            <button className="close-btn" onClick={closeSettings}>
+              ✕
+            </button>
+          </div>
         </div>
       </div>
 
