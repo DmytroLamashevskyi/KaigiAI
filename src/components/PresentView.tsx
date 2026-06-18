@@ -165,9 +165,15 @@ export default function PresentView({ side }: { side: "A" | "B" }) {
             return (
               <div key={i} className={"present-turn" + (turn.own ? " own" : " other")}>
                 <div className="present-speaker">{speakerName}</div>
-                <p className="present-line">{turn.text}</p>
+                {/* Each line follows the script direction of its own language,
+                    independent of the UI locale (§10.7 RTL support). */}
+                <p className="present-line" dir={isRtl(lang) ? "rtl" : "ltr"}>
+                  {turn.text}
+                </p>
                 {showOriginal && !turn.own && turn.source && (
-                  <p className="present-source">{turn.source}</p>
+                  <p className="present-source" dir={isRtl(turn.from) ? "rtl" : "ltr"}>
+                    {turn.source}
+                  </p>
                 )}
               </div>
             );

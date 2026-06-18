@@ -89,6 +89,9 @@ interface AppContextValue {
   /** In-flight segments for the active conversation, shown as live-timer
    *  placeholders below the transcript (§10.8). */
   activePending: PendingSegment[];
+  /** Message ids whose translations are currently being fetched, so the grid can
+   *  show a "translating…" placeholder instead of an empty-cell em-dash (§10.7). */
+  translatingIds: Record<string, boolean>;
   toggleRecording: () => void;
   dismissError: () => void;
   selectConversation: (id: string) => void;
@@ -112,8 +115,11 @@ interface AppContextValue {
    *  fix). `label` null clears the attribution. */
   reassignSpeaker: (messageId: string, label: string | null) => void;
   /** Flip a message to the other pair language (fixes a mis-detected side, e.g.
-   *  typed text in a same-script pair) and re-translate. */
+   *  typed text in a same-script pair) and re-translate. 2-language view only. */
   reassignMessageLang: (messageId: string) => void;
+  /** Set which conversation language a message was actually spoken in (N-language
+   *  manual fix, §10.7) and re-translate the original into every other language. */
+  setMessageLang: (messageId: string, newLang: string) => void;
   deleteConversation: (id: string) => void;
   /** Export modal: conversation id being exported, or null when closed. */
   exportId: string | null;
@@ -150,6 +156,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // In-flight segments (§10.8): keyed implicitly by pendingId. Cleared when the
   // finished message arrives (by pendingId) or the segment is cancelled.
   const [pending, setPending] = useState<PendingSegment[]>([]);
+  // Messages with translations in flight (typed input / language reassignment),
+  // so the N-column grid distinguishes "translating…" from "no translation".
+  const [translatingIds, setTranslatingIds] = useState<Record<string, boolean>>({});
+  const markTranslating = (id: string, on: boolean) =>
+    setTranslatingIds((prev) => {
+      if (on) return { ...prev, [id]: true };
+      if (!prev[id]) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
 
   // Merge a patch into one conversation by id (dedupes the map-and-replace
   // pattern used by rename/lang/speaker updates).
@@ -322,6 +339,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       activeConversation,
       activeMessages,
       activePending,
+      translatingIds,
       toggleRecording: () => {
         if (!activeId || preparing) return;
         if (recording) {
@@ -449,7 +467,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           [activeId]: [...(prev[activeId] ?? []), msg],
         }));
         patchConversation(activeId, { updatedAt: ts });
-        backend.addMessage(msg).catch(logErr("addMessage failed"));
+        markTranslating(id, true);
+        // Persist the original immediately (crash-safety), but keep a handle so
+        // the final translated write is strictly ordered AFTER it — both calls
+        // hit the destructive add_message (DELETE+reINSERT of message_translation)
+        // and an out-of-order empty write would silently wipe the translations.
+        const basePersist = backend
+          .addMessage(msg)
+          .catch(logErr("addMessage failed"));
         const patch = (m: Message) =>
           setMessages((prev) => ({
             ...prev,
@@ -459,7 +484,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // 2-language chat this is a single call, for 3+ it fans out and fills the
         // per-language `translations` map the grid reads.
         const targets = langs.filter((l) => l !== detectedLang);
-        Promise.all(
+        const translateAll = Promise.all(
           targets.map((to) =>
             backend
               .translate(trimmed, detectedLang, to)
@@ -469,7 +494,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 return [to, ""] as const;
               })
           )
-        ).then((pairs) => {
+        );
+        Promise.all([basePersist, translateAll]).then(([, pairs]) => {
           const translations: Record<string, string> = {};
           for (const [to, t] of pairs) if (t) translations[to] = t;
           const updated: Message = {
@@ -480,6 +506,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             translatedText: targets.length ? translations[targets[0]] ?? "" : "",
           };
           patch(updated);
+          markTranslating(id, false);
           backend.addMessage(updated).catch(logErr("persist translation failed"));
         });
       },
@@ -543,6 +570,57 @@ export function AppProvider({ children }: { children: ReactNode }) {
             backend.addMessage(done).catch(logErr("reassign translate persist failed"));
           })
           .catch(logErr("reassign translate failed"));
+      },
+      setMessageLang: (messageId, newLang) => {
+        if (!activeId || !activeConversation) return;
+        const convId = activeId;
+        const langs = conversationLangs(activeConversation);
+        const m = (messages[activeId] ?? []).find((x) => x.id === messageId);
+        if (!m || m.detectedLang === newLang) return;
+        // The utterance is now in `newLang`; clear stale translations and
+        // re-translate into every *other* conversation language.
+        const targets = langs.filter((l) => l !== newLang);
+        const base: Message = {
+          ...m,
+          detectedLang: newLang,
+          translations: {},
+          translatedText: "",
+          translatedTextB: null,
+        };
+        const apply = (msg: Message) =>
+          setMessages((prev) => ({
+            ...prev,
+            [convId]: (prev[convId] ?? []).map((x) => (x.id === messageId ? msg : x)),
+          }));
+        apply(base); // optimistic: original jumps to the new column immediately
+        markTranslating(messageId, true);
+        // The message already exists in the DB, so we persist EXACTLY ONCE — with
+        // the finished `done`. Writing the empty `base` first would race the final
+        // write (both DELETE+reINSERT message_translation) and could wipe it.
+        Promise.all(
+          targets.map((to) =>
+            backend
+              .translate(m.originalText, newLang, to)
+              .then((t) => [to, t] as const)
+              .catch((e) => {
+                logErr("reassign translate failed")(e);
+                return [to, ""] as const;
+              })
+          )
+        ).then((pairs) => {
+          const translations: Record<string, string> = {};
+          for (const [to, t] of pairs) if (t) translations[to] = t;
+          const done: Message = {
+            ...base,
+            translations,
+            translatedText: targets.length ? translations[targets[0]] ?? "" : "",
+          };
+          apply(done);
+          markTranslating(messageId, false);
+          backend
+            .addMessage(done)
+            .catch(logErr("reassign lang translate persist failed"));
+        });
       },
       deleteConversation: (id) => {
         setConversations((prev) => prev.filter((c) => c.id !== id));
@@ -640,7 +718,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       },
     };
-  }, [backend, patchConversation, recheckSetup, recheckSetupDebounced, conversations, messages, activeId, view, settings, recording, preparing, error, notice, summaryOpen, exportId, setupIssues, wizardOpen, pending]);
+  }, [backend, patchConversation, recheckSetup, recheckSetupDebounced, conversations, messages, activeId, view, settings, recording, preparing, error, notice, summaryOpen, exportId, setupIssues, wizardOpen, pending, translatingIds]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
