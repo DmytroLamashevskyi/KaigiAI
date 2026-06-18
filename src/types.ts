@@ -21,6 +21,11 @@ export interface Message {
    *  `translatedText` holds the langA translation, this holds langB. Null/absent
    *  for ordinary bilingual rows. */
   translatedTextB?: string | null;
+  /** Per-language translations (langCode → text) for the N-language mode (§10.7).
+   *  Holds a translation for every conversation language *except* the original
+   *  (`detectedLang`, whose text is `originalText`). Empty for 2-language rows,
+   *  which use `translatedText`/`translatedTextB`. The N-column grid reads this. */
+  translations?: Record<string, string>;
   startMs: number; // offset from recording start
   endMs: number;
   createdAt: number;
@@ -49,9 +54,50 @@ export interface Conversation {
   title: string;
   langA: LanguageCode;
   langB: LanguageCode;
+  /** Ordered conversation languages for the N-language mode (§10.7). For a
+   *  2-language chat this is `[langA, langB]`; with 3+ it drives the N-column
+   *  grid. Absent on rows that predate the feature — use {@link conversationLangs}
+   *  which falls back to `[langA, langB]`. Order = UI column order. */
+  langs?: LanguageCode[];
   speakerNames?: string | null; // JSON map of diarization label -> display name
   createdAt: number;
   updatedAt: number;
+}
+
+/** A conversation's ordered language list, falling back to `[langA, langB]` for
+ *  older rows that predate the multi-language column (§10.7). */
+export function conversationLangs(conv: Conversation): LanguageCode[] {
+  return conv.langs && conv.langs.length > 0
+    ? conv.langs
+    : [conv.langA, conv.langB];
+}
+
+/** The text of a message in a given conversation language: the original when
+ *  `lang` is what was spoken, otherwise its translation. Falls back to the
+ *  legacy `translatedText`/`translatedTextB` columns for 2-language rows that
+ *  predate the per-language `translations` map (§10.7). */
+export function textForLang(
+  message: Message,
+  lang: LanguageCode,
+  conv: Conversation
+): string {
+  if (lang === message.detectedLang) return message.originalText;
+  const fromMap = message.translations?.[lang];
+  if (fromMap !== undefined) return fromMap;
+  // Legacy fallback for messages saved before the per-language `translations`
+  // map. The scalar columns only ever held the original *pair* languages
+  // (langA/langB), so a later-added 3rd language has no stored text → "".
+  const foreign =
+    message.detectedLang !== conv.langA && message.detectedLang !== conv.langB;
+  if (foreign) {
+    if (lang === conv.langA) return message.translatedText;
+    if (lang === conv.langB) return message.translatedTextB ?? "";
+    return "";
+  }
+  // Pair message: `translatedText` is the translation into the *other* pair
+  // language; any other language is unknown.
+  const other = message.detectedLang === conv.langA ? conv.langB : conv.langA;
+  return lang === other ? message.translatedText : "";
 }
 
 /** Parsed `speakerNames` JSON (label -> display name); empty on absent/invalid. */

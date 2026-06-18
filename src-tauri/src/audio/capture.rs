@@ -172,9 +172,10 @@ where
                 on_event(event);
             }
         }
-        // Capture stopped: emit any in-progress utterance as a final segment.
-        if let Some(tail) = vad.flush() {
-            on_event(VadEvent::Segment(tail));
+        // Capture stopped: emit any in-progress utterance (or abort a showing
+        // countdown bar) so no placeholder is left orphaned.
+        for event in vad.flush() {
+            on_event(event);
         }
     })
 }

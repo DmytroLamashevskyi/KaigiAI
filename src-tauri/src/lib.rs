@@ -48,6 +48,7 @@ pub fn run() {
             commands::create_conversation,
             commands::rename_conversation,
             commands::set_conversation_langs,
+            commands::set_languages,
             commands::set_speaker_names,
             commands::set_message_speaker,
             commands::delete_conversation,
@@ -76,9 +77,14 @@ pub fn run() {
                     api.prevent_close();
                     let _ = window.hide();
                 } else if label == "main" {
-                    // The hidden present windows would otherwise keep the app
-                    // alive after the main window closes — quit explicitly.
-                    window.app_handle().exit(0);
+                    // Stop any recording cleanly (drops the capture stream and
+                    // flushes), then quit — the hidden present windows would
+                    // otherwise keep the app alive after the main window closes.
+                    let app = window.app_handle();
+                    if let Some(rec) = app.try_state::<Recorder>() {
+                        rec.stop();
+                    }
+                    app.exit(0);
                 }
             }
         })

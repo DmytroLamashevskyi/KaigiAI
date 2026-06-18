@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { Dispatch, SetStateAction } from "react";
+import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { Backend } from "../backend";
 import type { Conversation, Message, PendingSegment } from "../types";
 import { logErr } from "./helpers";
@@ -9,13 +9,17 @@ interface Setters {
   setPending: Dispatch<SetStateAction<PendingSegment[]>>;
   setConversations: Dispatch<SetStateAction<Conversation[]>>;
   setError: Dispatch<SetStateAction<string | null>>;
+  /** Always-current recording flag — placeholder events that arrive after a
+   *  stop (queued in the Tauri event loop) are ignored so they can't re-raise a
+   *  bar that the stop already cleared. */
+  recordingRef: MutableRefObject<boolean>;
 }
 
 /** Subscribe to the Rust recording pipeline's live events — transcript rows,
  *  non-fatal errors, and the §10.8 placeholder lifecycle — wiring each into the
  *  provided state setters. Extracted from AppProvider to keep it readable. */
 export function useRecordingEvents(backend: Backend, s: Setters): void {
-  const { setMessages, setPending, setConversations, setError } = s;
+  const { setMessages, setPending, setConversations, setError, recordingRef } = s;
 
   // Live transcript messages emitted by the Rust recording pipeline.
   useEffect(() => {
@@ -76,8 +80,11 @@ export function useRecordingEvents(backend: Backend, s: Setters): void {
     let unlistenCancelled: (() => void) | undefined;
     let cancelled = false;
     // Insert or update the placeholder for `pendingId`, restarting the phase
-    // clock so the CSS bar animates from the new phase's start.
-    const upsert = (next: PendingSegment) =>
+    // clock so the CSS bar animates from the new phase's start. Ignored once
+    // recording has stopped — a late silence/pending event must not re-raise a
+    // bar that the stop already cleared.
+    const upsert = (next: PendingSegment) => {
+      if (!recordingRef.current) return;
       setPending((prev) => {
         const i = prev.findIndex((p) => p.pendingId === next.pendingId);
         if (i < 0) return [...prev, next];
@@ -85,6 +92,7 @@ export function useRecordingEvents(backend: Backend, s: Setters): void {
         copy[i] = next;
         return copy;
       });
+    };
     backend
       .onSegmentSilence((p) => {
         upsert({
@@ -120,5 +128,5 @@ export function useRecordingEvents(backend: Backend, s: Setters): void {
       unlistenPending?.();
       unlistenCancelled?.();
     };
-  }, [backend, setPending]);
+  }, [backend, setPending, recordingRef]);
 }

@@ -10,15 +10,19 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
-use sqlx::FromRow;
+use sqlx::Row;
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Conversation {
     pub id: String,
     pub title: String,
     pub lang_a: String,
     pub lang_b: String,
+    /// Ordered conversation languages (§10.7). Read from the `langs` JSON column,
+    /// falling back to `[lang_a, lang_b]` for older rows (see `row_to_conversation`).
+    #[serde(default)]
+    pub langs: Vec<String>,
     /// JSON map of diarization label -> display name (e.g. {"Speaker 1":"Масаки"}).
     /// NULL until the user renames a speaker. See docs/PROJECT.md §10.6.
     pub speaker_names: Option<String>,
@@ -26,7 +30,7 @@ pub struct Conversation {
     pub updated_at: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
     pub id: String,
@@ -50,6 +54,12 @@ pub struct Message {
     /// text messages and rows created before this column existed.
     #[serde(default)]
     pub processing_ms: Option<i64>,
+    /// Per-language translations (lang -> text) for the N-language mode (§10.7),
+    /// loaded from `message_translation`. Empty for 2-language rows (which use
+    /// translated_text/translated_text_b) and pre-feature messages. Not a column —
+    /// filled in by `row_to_message` + `attach_translations`.
+    #[serde(default)]
+    pub translations: HashMap<String, String>,
 }
 
 /// One-shot snapshot used to hydrate the frontend on boot.
@@ -69,6 +79,9 @@ CREATE TABLE IF NOT EXISTS conversation (
   title       TEXT NOT NULL,
   lang_a      TEXT NOT NULL,
   lang_b      TEXT NOT NULL,
+  -- JSON array of ISO codes for the multi-language mode (§10.7); NULL on older
+  -- rows, in which case [lang_a, lang_b] is used. Order = UI column order.
+  langs       TEXT,
   speaker_names TEXT,
   created_at  INTEGER NOT NULL,
   updated_at  INTEGER NOT NULL
@@ -89,6 +102,17 @@ CREATE TABLE IF NOT EXISTS message (
   processing_ms   INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_message_conv ON message(conversation_id);
+
+-- Per-language translations of a message (§10.7 N-language mode): one row per
+-- conversation language EXCEPT the original. The 2-language path also keeps
+-- translated_text/translated_text_b for back-compat; the N-language grid reads
+-- this table.
+CREATE TABLE IF NOT EXISTS message_translation (
+  message_id TEXT NOT NULL REFERENCES message(id) ON DELETE CASCADE,
+  lang       TEXT NOT NULL,
+  text       TEXT NOT NULL,
+  PRIMARY KEY (message_id, lang)
+);
 
 CREATE TABLE IF NOT EXISTS summary (
   conversation_id TEXT PRIMARY KEY REFERENCES conversation(id) ON DELETE CASCADE,
@@ -117,6 +141,62 @@ CREATE TABLE IF NOT EXISTS setting (
 );
 "#;
 
+/// Build a [`Conversation`] from a row, parsing the `langs` JSON column (falling
+/// back to `[lang_a, lang_b]` for older rows that predate multi-language).
+fn row_to_conversation(row: &sqlx::sqlite::SqliteRow) -> Conversation {
+    let lang_a: String = row.get("lang_a");
+    let lang_b: String = row.get("lang_b");
+    let langs = row
+        .get::<Option<String>, _>("langs")
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| vec![lang_a.clone(), lang_b.clone()]);
+    Conversation {
+        id: row.get("id"),
+        title: row.get("title"),
+        lang_a,
+        lang_b,
+        langs,
+        speaker_names: row.get("speaker_names"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+/// Build a [`Message`] from a row. `translations` starts empty and is filled in
+/// by [`attach_translations`] (mapped manually because `HashMap`/`Vec` fields
+/// can't be `sqlx::FromRow`-decoded).
+fn row_to_message(row: &sqlx::sqlite::SqliteRow) -> Message {
+    Message {
+        id: row.get("id"),
+        conversation_id: row.get("conversation_id"),
+        source: row.get("source"),
+        detected_lang: row.get("detected_lang"),
+        speaker: row.get("speaker"),
+        original_text: row.get("original_text"),
+        translated_text: row.get("translated_text"),
+        translated_text_b: row.get("translated_text_b"),
+        start_ms: row.get("start_ms"),
+        end_ms: row.get("end_ms"),
+        created_at: row.get("created_at"),
+        processing_ms: row.get("processing_ms"),
+        translations: HashMap::new(),
+    }
+}
+
+/// Fill each message's `translations` map from `(message_id, lang, text)` rows.
+fn attach_translations(messages: &mut [Message], rows: Vec<(String, String, String)>) {
+    let mut by_id: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for (mid, lang, text) in rows {
+        by_id.entry(mid).or_default().insert(lang, text);
+    }
+    for m in messages.iter_mut() {
+        if let Some(map) = by_id.remove(&m.id) {
+            m.translations = map;
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Db {
     pool: SqlitePool,
@@ -144,21 +224,29 @@ impl Db {
 
     async fn init_schema(&self) -> Result<(), sqlx::Error> {
         sqlx::raw_sql(SCHEMA).execute(&self.pool).await?;
-        // Migration for DBs created before the column existed. `CREATE TABLE IF
-        // NOT EXISTS` won't add columns, so add it idempotently and ignore the
-        // "duplicate column" error on already-migrated databases.
-        let _ = sqlx::query("ALTER TABLE conversation ADD COLUMN speaker_names TEXT")
-            .execute(&self.pool)
-            .await;
+        // Idempotent column migrations for older DBs. The expected "duplicate
+        // column name" error on already-migrated databases is ignored; ANY OTHER
+        // failure (locked DB, disk full, …) is logged rather than silently
+        // swallowed, so a half-applied schema is visible instead of surfacing as
+        // mysterious runtime errors later.
+        self.add_column("ALTER TABLE conversation ADD COLUMN speaker_names TEXT").await;
+        // Multi-language column list (§10.7 N-language mode).
+        self.add_column("ALTER TABLE conversation ADD COLUMN langs TEXT").await;
         // Secondary translation for foreign-language rows (§10.7 variant A).
-        let _ = sqlx::query("ALTER TABLE message ADD COLUMN translated_text_b TEXT")
-            .execute(&self.pool)
-            .await;
+        self.add_column("ALTER TABLE message ADD COLUMN translated_text_b TEXT").await;
         // Speech→text pipeline latency in ms (§10.8).
-        let _ = sqlx::query("ALTER TABLE message ADD COLUMN processing_ms INTEGER")
-            .execute(&self.pool)
-            .await;
+        self.add_column("ALTER TABLE message ADD COLUMN processing_ms INTEGER").await;
         Ok(())
+    }
+
+    /// Run an idempotent `ALTER TABLE ... ADD COLUMN`, ignoring the duplicate-
+    /// column error but logging anything unexpected.
+    async fn add_column(&self, sql: &str) {
+        if let Err(e) = sqlx::query(sql).execute(&self.pool).await {
+            if !e.to_string().to_lowercase().contains("duplicate column") {
+                log::warn!("migration `{sql}` failed: {e}");
+            }
+        }
     }
 
     pub async fn bootstrap(&self) -> Result<Bootstrap, sqlx::Error> {
@@ -177,56 +265,102 @@ impl Db {
     }
 
     pub async fn list_conversations(&self) -> Result<Vec<Conversation>, sqlx::Error> {
-        sqlx::query_as::<_, Conversation>(
-            "SELECT id, title, lang_a, lang_b, speaker_names, created_at, updated_at \
+        let rows = sqlx::query(
+            "SELECT id, title, lang_a, lang_b, langs, speaker_names, created_at, updated_at \
              FROM conversation ORDER BY updated_at DESC",
         )
         .fetch_all(&self.pool)
-        .await
+        .await?;
+        Ok(rows.iter().map(row_to_conversation).collect())
     }
 
     pub async fn get_conversation(&self, id: &str) -> Result<Option<Conversation>, sqlx::Error> {
-        sqlx::query_as::<_, Conversation>(
-            "SELECT id, title, lang_a, lang_b, speaker_names, created_at, updated_at \
+        let row = sqlx::query(
+            "SELECT id, title, lang_a, lang_b, langs, speaker_names, created_at, updated_at \
              FROM conversation WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
-        .await
+        .await?;
+        Ok(row.as_ref().map(row_to_conversation))
     }
 
     pub async fn list_messages(&self, conversation_id: &str) -> Result<Vec<Message>, sqlx::Error> {
-        sqlx::query_as::<_, Message>(
+        let mut messages: Vec<Message> = sqlx::query(
             "SELECT id, conversation_id, source, detected_lang, speaker, \
              original_text, translated_text, translated_text_b, start_ms, end_ms, created_at, processing_ms \
              FROM message WHERE conversation_id = ? ORDER BY created_at ASC",
         )
         .bind(conversation_id)
         .fetch_all(&self.pool)
-        .await
+        .await?
+        .iter()
+        .map(row_to_message)
+        .collect();
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT mt.message_id, mt.lang, mt.text FROM message_translation mt \
+             JOIN message m ON m.id = mt.message_id WHERE m.conversation_id = ?",
+        )
+        .bind(conversation_id)
+        .fetch_all(&self.pool)
+        .await?;
+        attach_translations(&mut messages, rows);
+        Ok(messages)
     }
 
     async fn list_all_messages(&self) -> Result<Vec<Message>, sqlx::Error> {
-        sqlx::query_as::<_, Message>(
+        let mut messages: Vec<Message> = sqlx::query(
             "SELECT id, conversation_id, source, detected_lang, speaker, \
              original_text, translated_text, translated_text_b, start_ms, end_ms, created_at, processing_ms \
              FROM message ORDER BY created_at ASC",
         )
         .fetch_all(&self.pool)
-        .await
+        .await?
+        .iter()
+        .map(row_to_message)
+        .collect();
+        let rows: Vec<(String, String, String)> =
+            sqlx::query_as("SELECT message_id, lang, text FROM message_translation")
+                .fetch_all(&self.pool)
+                .await?;
+        attach_translations(&mut messages, rows);
+        Ok(messages)
     }
 
     pub async fn create_conversation(&self, c: &Conversation) -> Result<(), sqlx::Error> {
+        let langs_json = (!c.langs.is_empty())
+            .then(|| serde_json::to_string(&c.langs).ok())
+            .flatten();
         sqlx::query(
-            "INSERT INTO conversation (id, title, lang_a, lang_b, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO conversation (id, title, lang_a, lang_b, langs, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&c.id)
         .bind(&c.title)
         .bind(&c.lang_a)
         .bind(&c.lang_b)
+        .bind(langs_json)
         .bind(c.created_at)
         .bind(c.updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Set the ordered language list (§10.7). The first two are mirrored into
+    /// `lang_a`/`lang_b` so 2-language back-compat paths keep working.
+    pub async fn set_languages(&self, id: &str, langs: &[String], updated_at: i64) -> Result<(), sqlx::Error> {
+        let lang_a = langs.first().cloned().unwrap_or_default();
+        let lang_b = langs.get(1).cloned().unwrap_or_default();
+        let langs_json = serde_json::to_string(langs).unwrap_or_else(|_| "[]".into());
+        sqlx::query(
+            "UPDATE conversation SET langs = ?, lang_a = ?, lang_b = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(langs_json)
+        .bind(lang_a)
+        .bind(lang_b)
+        .bind(updated_at)
+        .bind(id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -243,9 +377,13 @@ impl Db {
     }
 
     pub async fn set_conversation_langs(&self, id: &str, lang_a: &str, lang_b: &str, updated_at: i64) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE conversation SET lang_a = ?, lang_b = ?, updated_at = ? WHERE id = ?")
+        // Keep the `langs` array in sync with the 2-language selector so the
+        // multi-language grid never sees a stale list.
+        let langs_json = serde_json::to_string(&[lang_a, lang_b]).unwrap_or_else(|_| "[]".into());
+        sqlx::query("UPDATE conversation SET lang_a = ?, lang_b = ?, langs = ?, updated_at = ? WHERE id = ?")
             .bind(lang_a)
             .bind(lang_b)
+            .bind(langs_json)
             .bind(updated_at)
             .bind(id)
             .execute(&self.pool)
@@ -321,6 +459,22 @@ impl Db {
         .bind(m.processing_ms)
         .execute(&self.pool)
         .await?;
+        // Replace the per-language translations (§10.7). Cheap: a message has at
+        // most a few langs. Empty map (2-language path) leaves nothing here.
+        sqlx::query("DELETE FROM message_translation WHERE message_id = ?")
+            .bind(&m.id)
+            .execute(&self.pool)
+            .await?;
+        for (lang, text) in &m.translations {
+            sqlx::query(
+                "INSERT INTO message_translation (message_id, lang, text) VALUES (?, ?, ?)",
+            )
+            .bind(&m.id)
+            .bind(lang)
+            .bind(text)
+            .execute(&self.pool)
+            .await?;
+        }
         self.touch_conversation(&m.conversation_id, m.created_at).await?;
         Ok(())
     }
@@ -393,6 +547,7 @@ mod tests {
             title: "Untitled".into(),
             lang_a: "ru".into(),
             lang_b: "en".into(),
+            langs: vec!["ru".into(), "en".into()],
             speaker_names: None,
             created_at: ts,
             updated_at: ts,
@@ -413,6 +568,7 @@ mod tests {
             end_ms: 0,
             processing_ms: None,
             created_at: ts,
+            translations: std::collections::HashMap::new(),
         }
     }
 
@@ -452,6 +608,23 @@ mod tests {
             assert_eq!(boot.conversations[0].title, "Renamed");
             assert_eq!(boot.conversations[0].lang_a, "ja");
             assert_eq!(boot.conversations[0].lang_b, "ko");
+            assert_eq!(boot.conversations[0].langs, vec!["ja", "ko"]);
+
+            // N-language mode (§10.7): per-message translations + langs list.
+            let mut m2 = msg("m2", "c1", 250);
+            m2.translations.insert("ja".into(), "こんにちは".into());
+            m2.translations.insert("en".into(), "Hi".into());
+            db.add_message(&m2).await.unwrap();
+            let listed = db.list_messages("c1").await.unwrap();
+            let got = listed.iter().find(|x| x.id == "m2").unwrap();
+            assert_eq!(got.translations.get("ja").map(String::as_str), Some("こんにちは"));
+            assert_eq!(got.translations.get("en").map(String::as_str), Some("Hi"));
+
+            db.set_languages("c1", &["ru".into(), "ja".into(), "en".into()], 500)
+                .await
+                .unwrap();
+            let boot = db.bootstrap().await.unwrap();
+            assert_eq!(boot.conversations[0].langs, vec!["ru", "ja", "en"]);
 
             // settings persist + read back
             let s = serde_json::json!({ "theme": "dark", "fontSize": "large" });

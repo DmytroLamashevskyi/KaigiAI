@@ -1,36 +1,40 @@
 import { useEffect, useRef } from "react";
 import { useApp } from "../state/AppState";
-import { languageName } from "../data/languages";
 import { FONT_SCALE } from "../data/fontSize";
+import { conversationLangs, textForLang } from "../types";
 import type { PresentState } from "./channel";
 import { onPresentHello, postPresentState } from "./transport";
 
 // Lives in the main window. Mirrors the active conversation to any open
 // presentation windows over the cross-window transport (Tauri events / browser
-// BroadcastChannel).
+// BroadcastChannel). Carries every conversation language so each present window
+// can pick which one to display (§10.7).
 export default function PresentBroadcaster() {
   const { activeConversation, activeMessages, settings, recording } = useApp();
   const stateRef = useRef<PresentState | null>(null);
 
-  const langA = activeConversation?.langA ?? "";
-  const langB = activeConversation?.langB ?? "";
+  const langs = activeConversation ? conversationLangs(activeConversation) : [];
   stateRef.current = {
     type: "state",
     locale: settings.appLanguage,
     theme: settings.theme,
     fontScale: FONT_SCALE[settings.fontSize],
-    langAName: languageName(langA),
-    langBName: languageName(langB),
+    langs,
     recording,
-    rows: activeMessages.map((m) => {
-      const spokenOnA = m.detectedLang === langA;
-      return {
-        a: spokenOnA ? m.originalText : m.translatedText,
-        b: spokenOnA ? m.translatedText : m.originalText,
-        speaker: m.speaker ?? null,
-        from: spokenOnA ? ("A" as const) : ("B" as const),
-      };
-    }),
+    rows: activeConversation
+      ? activeMessages.map((m) => {
+          // Original under its own language, plus a translation per other language.
+          const texts: Record<string, string> = { [m.detectedLang]: m.originalText };
+          for (const lang of langs) {
+            texts[lang] = textForLang(m, lang, activeConversation);
+          }
+          return {
+            texts,
+            fromLang: m.detectedLang,
+            speaker: m.speaker ?? null,
+          };
+        })
+      : [],
   };
 
   // A present window that just opened asks for the current state; reply to it.

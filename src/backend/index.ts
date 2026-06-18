@@ -43,6 +43,9 @@ export interface Backend {
     langB: string,
     updatedAt: number
   ): Promise<void>;
+  // Replace a conversation's full ordered language list (§10.7 N-language mode).
+  // The first two entries mirror into langA/langB for back-compat.
+  setLanguages(id: string, langs: string[], updatedAt: number): Promise<void>;
   setSpeakerNames(id: string, namesJson: string, updatedAt: number): Promise<void>;
   // Reassign a single message to a different speaker label (manual diarization
   // fix). `label` null clears the attribution. See docs/PROJECT.md §10.9.
@@ -112,6 +115,8 @@ function tauriBackend(): Backend {
       invoke<void>("rename_conversation", { id, title, updatedAt }),
     setConversationLangs: (id, langA, langB, updatedAt) =>
       invoke<void>("set_conversation_langs", { id, langA, langB, updatedAt }),
+    setLanguages: (id, langs, updatedAt) =>
+      invoke<void>("set_languages", { id, langs, updatedAt }),
     setSpeakerNames: (id, namesJson, updatedAt) =>
       invoke<void>("set_speaker_names", { id, namesJson, updatedAt }),
     setMessageSpeaker: (messageId, label) =>
@@ -219,6 +224,17 @@ function localBackend(): Backend {
         if (c) {
           c.langA = langA;
           c.langB = langB;
+          c.langs = [langA, langB];
+          c.updatedAt = updatedAt;
+        }
+      }),
+    setLanguages: (id, langs, updatedAt) =>
+      mutate((s) => {
+        const c = s.conversations.find((x) => x.id === id);
+        if (c) {
+          c.langs = langs;
+          c.langA = langs[0] ?? c.langA;
+          c.langB = langs[1] ?? c.langB;
           c.updatedAt = updatedAt;
         }
       }),

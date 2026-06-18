@@ -128,9 +128,13 @@ impl Vad {
         out
     }
 
-    /// Emit any in-progress segment. Call when capture stops so a final
-    /// utterance that never saw trailing silence is not lost.
-    pub fn flush(&mut self) -> Option<Vec<f32>> {
+    /// Finalize any in-progress segment. Call when capture stops so a final
+    /// utterance that never saw trailing silence is not lost. Mirrors
+    /// [`Self::close_segment`]: emits the [`VadEvent::Segment`] if long enough, or
+    /// a [`VadEvent::PendingAborted`] if a countdown bar was showing but the
+    /// segment is discarded — so the UI placeholder is never left orphaned.
+    pub fn flush(&mut self) -> Vec<VadEvent> {
+        let mut out = Vec::new();
         if !self.partial.is_empty() {
             if let State::Speech = self.state {
                 let tail = std::mem::take(&mut self.partial);
@@ -145,13 +149,16 @@ impl Vad {
             let trim = self.silence_run.saturating_mul(FRAME_SAMPLES);
             let keep = self.segment.len().saturating_sub(trim);
             self.segment.truncate(keep);
+            let announced = self.pause_announced;
             let seg = std::mem::take(&mut self.segment);
             self.reset_runs();
             if seg.len() >= self.cfg.min_segment_samples {
-                return Some(seg);
+                out.push(VadEvent::Segment(seg));
+            } else if announced {
+                out.push(VadEvent::PendingAborted);
             }
         }
-        None
+        out
     }
 
     fn process_frame(&mut self, frame: &[f32], out: &mut Vec<VadEvent>) {
@@ -289,9 +296,7 @@ mod tests {
         segments.extend(segs(vad.push(&vec![0.0f32; SAMPLE_RATE as usize])));
         segments.extend(segs(vad.push(&sine(SAMPLE_RATE as usize, 220.0, 0.3))));
         segments.extend(segs(vad.push(&vec![0.0f32; SAMPLE_RATE as usize])));
-        if let Some(tail) = vad.flush() {
-            segments.push(tail);
-        }
+        segments.extend(segs(vad.flush()));
 
         assert_eq!(segments.len(), 1, "expected exactly one speech segment");
         let len = segments[0].len();
@@ -307,7 +312,7 @@ mod tests {
         let mut vad = Vad::new(VadConfig::default());
         let out = vad.push(&vec![0.0f32; SAMPLE_RATE as usize * 3]);
         assert!(out.is_empty());
-        assert!(vad.flush().is_none());
+        assert!(vad.flush().is_empty());
     }
 
     #[test]
@@ -351,6 +356,31 @@ mod tests {
     }
 
     #[test]
+    fn flush_aborts_announced_pause_when_segment_discarded() {
+        // Stop recording mid-pause with too little speech to keep: flush must emit
+        // PendingAborted (not a Segment) so the on-screen countdown bar is cleared.
+        let cfg = VadConfig {
+            reveal_frames: 2,
+            end_frames: 50,
+            min_segment_samples: SAMPLE_RATE as usize, // require ~1 s; our speech is short
+            ..VadConfig::default()
+        };
+        let mut vad = Vad::new(cfg);
+        let _ = vad.push(&sine(SAMPLE_RATE as usize / 10, 220.0, 0.3)); // ~0.1 s speech
+        let ev = vad.push(&vec![0.0f32; FRAME_SAMPLES * 3]); // 3 silent frames > reveal
+        assert!(
+            ev.iter().any(|e| matches!(e, VadEvent::SilenceStarted { .. })),
+            "the pause should have been announced"
+        );
+        let flushed = vad.flush();
+        assert!(
+            flushed.iter().any(|e| matches!(e, VadEvent::PendingAborted)),
+            "flush must abort the announced pause when the segment is discarded"
+        );
+        assert!(segs(flushed).is_empty(), "the too-short segment must not be emitted");
+    }
+
+    #[test]
     fn long_speech_is_split_at_cap() {
         let cfg = VadConfig {
             max_segment_samples: SAMPLE_RATE as usize, // 1 s cap
@@ -359,9 +389,7 @@ mod tests {
         let mut vad = Vad::new(cfg);
         // 3 s of continuous tone should split into ~3 capped segments.
         let mut segments = segs(vad.push(&sine(SAMPLE_RATE as usize * 3, 220.0, 0.3)));
-        if let Some(tail) = vad.flush() {
-            segments.push(tail);
-        }
+        segments.extend(segs(vad.flush()));
         assert!(segments.len() >= 2, "expected long speech to be split, got {}", segments.len());
     }
 }

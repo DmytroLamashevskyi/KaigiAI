@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { PresentState } from "../present/channel";
 import { onPresentState, postPresentHello } from "../present/transport";
+import { languageName } from "../data/languages";
 import { translate, isRtl } from "../i18n";
 
 // Rendered in a standalone window (present.html, label present-a/present-b).
-// Shows one side of the transcript large, for an audience/second screen, with
-// its own toolbar (text size, theme, show-original) remembered per window.
+// Shows one conversation language large, for an audience/second screen, with its
+// own toolbar (language, text size, theme, show-original) remembered per window.
 const SCALE_MIN = 0.7;
 const SCALE_MAX = 2.6;
 const SCALE_STEP = 0.1;
@@ -25,6 +26,11 @@ export default function PresentView({ side }: { side: "A" | "B" }) {
   const [showOriginal, setShowOriginal] = useState(
     () => localStorage.getItem(lsKey("orig")) !== "0"
   );
+  // Which conversation language this window shows. Persisted; defaults to this
+  // window's slot (A→first language, B→second) once state arrives (§10.7).
+  const [lang, setLang] = useState<string>(
+    () => localStorage.getItem(lsKey("lang")) || ""
+  );
 
   useEffect(() => localStorage.setItem(lsKey("scale"), String(scale)), [scale]);
   useEffect(() => {
@@ -35,6 +41,9 @@ export default function PresentView({ side }: { side: "A" | "B" }) {
     () => localStorage.setItem(lsKey("orig"), showOriginal ? "1" : "0"),
     [showOriginal]
   );
+  useEffect(() => {
+    if (lang) localStorage.setItem(lsKey("lang"), lang);
+  }, [lang]);
 
   useEffect(() => {
     const off = onPresentState(setState);
@@ -47,25 +56,40 @@ export default function PresentView({ side }: { side: "A" | "B" }) {
     };
   }, []);
 
-  // Keep re-requesting until we actually receive state (startup race).
+  // Settle on a language once the conversation's list arrives: a remembered one
+  // if still valid, otherwise this window's slot (A→[0], B→[1]).
+  const langsList = state?.langs ?? [];
+  useEffect(() => {
+    if (langsList.length === 0) return;
+    if (lang && langsList.includes(lang)) return;
+    setLang(langsList[side === "A" ? 0 : 1] ?? langsList[0]);
+  }, [langsList.join(","), side]);
+
+  // Keep re-requesting until we actually receive state (covers the startup race
+  // where the broadcaster wasn't listening yet). Capped so it can't poll forever
+  // if the broadcaster is truly gone (focusing the window re-arms it anyway).
   useEffect(() => {
     if (state) return;
-    const id = setInterval(postPresentHello, 1000);
+    let attempts = 0;
+    const id = setInterval(() => {
+      postPresentHello();
+      attempts += 1;
+      if (attempts >= 30) clearInterval(id);
+    }, 1000);
     return () => clearInterval(id);
   }, [state]);
 
   const locale = state?.locale ?? "en";
-  const name = side === "A" ? state?.langAName : state?.langBName;
-  const langAName = state?.langAName ?? "A";
-  const langBName = state?.langBName ?? "B";
+  const name = lang ? languageName(lang) : "";
   const recording = state?.recording ?? false;
 
   const turns = (state?.rows ?? [])
     .map((r) => ({
-      text: side === "A" ? r.a : r.b,
-      // The other side's text = the original utterance for a translated turn.
-      source: side === "A" ? r.b : r.a,
-      from: r.from,
+      text: r.texts[lang] ?? "",
+      // The original utterance, shown small beneath a translated line.
+      source: r.texts[r.fromLang] ?? "",
+      own: r.fromLang === lang,
+      from: r.fromLang,
       speaker: r.speaker,
     }))
     .filter((r) => r.text);
@@ -84,7 +108,22 @@ export default function PresentView({ side }: { side: "A" | "B" }) {
       style={{ ["--present-scale" as string]: scale }}
     >
       <div className="present-header">
-        <span className="present-lang">{name}</span>
+        {langsList.length > 2 ? (
+          <select
+            className="present-lang-select"
+            value={lang}
+            onChange={(e) => setLang(e.target.value)}
+            title="Язык этого окна"
+          >
+            {langsList.map((l) => (
+              <option key={l} value={l}>
+                {languageName(l)}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span className="present-lang">{name}</span>
+        )}
         <div className="present-controls">
           <span
             className={"present-status" + (recording ? " live" : "")}
@@ -122,14 +161,12 @@ export default function PresentView({ side }: { side: "A" | "B" }) {
           <div className="present-empty">{translate(locale, "present.waiting")}</div>
         ) : (
           turns.map((turn, i) => {
-            const own = turn.from === side;
-            const speakerName =
-              turn.speaker || (turn.from === "A" ? langAName : langBName);
+            const speakerName = turn.speaker || languageName(turn.from);
             return (
-              <div key={i} className={"present-turn" + (own ? " own" : " other")}>
+              <div key={i} className={"present-turn" + (turn.own ? " own" : " other")}>
                 <div className="present-speaker">{speakerName}</div>
                 <p className="present-line">{turn.text}</p>
-                {showOriginal && !own && turn.source && (
+                {showOriginal && !turn.own && turn.source && (
                   <p className="present-source">{turn.source}</p>
                 )}
               </div>

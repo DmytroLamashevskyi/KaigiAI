@@ -8,6 +8,7 @@
 //! cpal's `Stream` is `!Send`, so the capture object lives on a dedicated
 //! controller thread; segments cross thread boundaries as plain PCM.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Mutex;
@@ -99,6 +100,13 @@ impl Recorder {
 
         let lang_a = conv.lang_a.clone();
         let lang_b = conv.lang_b.clone();
+        // Conversation languages (§10.7). For a 2-language chat this is just
+        // [lang_a, lang_b]; with 3+ it drives N-way translation and the grid UI.
+        let langs: Vec<String> = if conv.langs.is_empty() {
+            vec![lang_a.clone(), lang_b.clone()]
+        } else {
+            conv.langs.clone()
+        };
         let conv_id = conv.id.clone();
         let source = match settings.get("audioSource").and_then(|v| v.as_str()) {
             Some("system") => AudioSource::System,
@@ -170,7 +178,8 @@ impl Recorder {
         let translator = provider::translation_from_settings(&settings);
         // Per-session diarizer: labels are stable within this conversation only.
         let mut diarizer = provider::diarizer_from_settings(&settings);
-        let hint = vec![lang_a.clone(), lang_b.clone()];
+        // Hand whisper every conversation language as a decoding hint.
+        let hint = langs.clone();
         let err_app = app.clone();
         // Cloned for the controller thread before `app`/`conv_id` are moved into
         // the async pipeline below (the controller emits silence/abort events).
@@ -220,29 +229,33 @@ impl Recorder {
                         }
                     }
                 };
-                // Resolve whisper's detected language against the pair, snapping
-                // obvious misfires by script and (unless foreign detection is on)
-                // forcing the result onto lang_a/lang_b. See `resolve_lang`.
+                // Resolve whisper's detected language against the conversation
+                // languages, snapping obvious misfires by script and (unless
+                // foreign detection is on) forcing the result onto one of them.
                 let detected =
-                    resolve_lang(&transcript.lang, &transcript.text, &lang_a, &lang_b, detect_foreign);
-                // Three cases (docs/PROJECT.md §10.7 variant A):
-                //  - spoke lang_a  → translate into lang_b
-                //  - spoke lang_b  → translate into lang_a
-                //  - foreign lang  → translate into BOTH; UI shows the original
-                //    full-width and a translation in each column.
-                let is_pair = detected == lang_a || detected == lang_b;
-                let (translated, translated_b) = if !is_pair {
-                    let into_a = do_translate(detected.clone(), lang_a.clone()).await;
-                    let into_b = do_translate(detected.clone(), lang_b.clone()).await;
-                    (into_a, Some(into_b))
-                } else {
-                    let (from, to) = if detected == lang_b {
-                        (lang_b.clone(), lang_a.clone())
-                    } else {
-                        (lang_a.clone(), lang_b.clone())
-                    };
-                    (do_translate(from, to).await, None)
-                };
+                    resolve_lang_n(&transcript.lang, &transcript.text, &langs, detect_foreign);
+                // Translate the utterance into every *other* conversation language
+                // (docs/PROJECT.md §10.7). For 2 languages this is a single
+                // translation; with 3+ it fans out, one row per target language
+                // stored in `message_translation`.
+                let mut translations: HashMap<String, String> = HashMap::new();
+                for target in &langs {
+                    if target == &detected {
+                        continue;
+                    }
+                    let t = do_translate(detected.clone(), target.clone()).await;
+                    if !t.is_empty() {
+                        translations.insert(target.clone(), t);
+                    }
+                }
+                // Back-compat scalar fields for the 2-column view / export:
+                //  - pair utterance → `translated_text` = the other language.
+                //  - foreign utterance (outside the pair) → `translated_text` =
+                //    lang_a translation, `translated_text_b` = lang_b translation.
+                //  - 3+ languages → `translated_text` = first other language; the
+                //    grid UI reads `translations` instead.
+                let (translated, translated_b) =
+                    back_compat_translations(&detected, &langs, &translations);
                 let speaker = diarizer.label(&pcm, SAMPLE_RATE);
                 let now = now_ms();
                 // Whole-pipeline latency: from the moment VAD released the
@@ -261,6 +274,7 @@ impl Recorder {
                     end_ms,
                     created_at: now,
                     processing_ms: Some(processing_ms),
+                    translations,
                 };
                 if let Err(e) = db.add_message(&msg).await {
                     log::error!("persist message failed: {e}");
@@ -463,6 +477,16 @@ fn is_filler(w: &str) -> bool {
             | "эээ"
             | "мхм"
             | "кашель"
+            // Japanese hesitations (whole-segment only; word-like ones such as
+            // あの/その are deliberately excluded to avoid dropping real speech).
+            | "えっと"
+            | "ええと"
+            | "えーと"
+            | "えー"
+            | "あー"
+            | "うー"
+            | "うーん"
+            | "んー"
     )
 }
 
@@ -537,37 +561,86 @@ fn script_fits_lang(script: Script, lang: &str) -> bool {
 /// - If on, a genuine third language is kept — but a claim that contradicts the
 ///   text script is still corrected toward a matching pair language (e.g. Cyrillic
 ///   text labelled "tr" becomes `ru`).
+#[cfg(test)]
 fn resolve_lang(detected: &str, text: &str, lang_a: &str, lang_b: &str, detect_foreign: bool) -> String {
+    resolve_lang_n(
+        detected,
+        text,
+        &[lang_a.to_string(), lang_b.to_string()],
+        detect_foreign,
+    )
+}
+
+/// N-language generalization of [`resolve_lang`] (§10.7). Picks the conversation
+/// language for an utterance from whisper's claim plus the decoded text's script.
+/// With `detect_foreign` off the result is always one of `langs`; with it on a
+/// genuine outside language is kept unless the script unambiguously points at a
+/// single conversation language. For a 2-element `langs` this is identical to the
+/// original pair logic (the `resolve_lang` tests still exercise that path).
+fn resolve_lang_n(detected: &str, text: &str, langs: &[String], detect_foreign: bool) -> String {
     let script = dominant_script(text);
-    let a_fits = script_fits_lang(script, lang_a);
-    let b_fits = script_fits_lang(script, lang_b);
-    let in_pair = detected == lang_a || detected == lang_b;
+    // Conversation languages whose writing system matches the decoded text.
+    let fits: Vec<&String> = langs
+        .iter()
+        .filter(|l| script_fits_lang(script, l))
+        .collect();
+    let in_set = langs.iter().any(|l| l == detected);
 
     if detect_foreign {
-        // Trust whisper unless the script clearly points at one pair language and
-        // whisper disagrees with it.
-        if !in_pair {
-            if a_fits && !b_fits {
-                return lang_a.to_string();
-            }
-            if b_fits && !a_fits {
-                return lang_b.to_string();
-            }
+        // Trust whisper, but correct a clear contradiction: text whose script
+        // matches exactly one conversation language overrides a label outside
+        // the set (e.g. Cyrillic tagged "tr" → ru).
+        if !in_set && fits.len() == 1 {
+            return fits[0].clone();
         }
         return detected.to_string();
     }
 
-    // Locked to the pair: choose by script, preferring whisper's guess to break ties.
-    if a_fits && !b_fits {
-        return lang_a.to_string();
+    // Locked to the set: snap to the single matching language if unambiguous,
+    // else keep whisper's guess when it is already in the set, else the first
+    // matching language, else the first conversation language.
+    if fits.len() == 1 {
+        return fits[0].clone();
     }
-    if b_fits && !a_fits {
-        return lang_b.to_string();
-    }
-    if in_pair {
+    if in_set {
         return detected.to_string();
     }
-    lang_a.to_string()
+    if let Some(f) = fits.first() {
+        return (*f).clone();
+    }
+    langs
+        .first()
+        .cloned()
+        .unwrap_or_else(|| detected.to_string())
+}
+
+/// Derive the legacy scalar translation columns from the per-language map so the
+/// 2-column transcript view, the foreign-row layout, and Markdown export keep
+/// working unchanged while the N-language grid reads `translations` (§10.7).
+fn back_compat_translations(
+    detected: &str,
+    langs: &[String],
+    translations: &HashMap<String, String>,
+) -> (String, Option<String>) {
+    let get = |l: &str| translations.get(l).cloned().unwrap_or_default();
+    if langs.len() > 2 {
+        // N-language: the first other language seeds the legacy column; the grid
+        // UI reads the full map instead.
+        let first_other = langs.iter().find(|l| l.as_str() != detected);
+        return (first_other.map(|l| get(l)).unwrap_or_default(), None);
+    }
+    let a = langs.first().map(String::as_str).unwrap_or("");
+    let b = langs.get(1).map(String::as_str);
+    let in_pair = detected == a || b == Some(detected);
+    if in_pair {
+        // Pair utterance: translated into the other pair language.
+        let other = if detected == a { b } else { Some(a) };
+        (other.map(get).unwrap_or_default(), None)
+    } else {
+        // Foreign utterance: lang_a translation in the primary column, lang_b in
+        // the secondary (variant A layout).
+        (get(a), b.map(get))
+    }
 }
 
 /// Push a non-fatal error to the UI (best-effort; failures to emit are ignored).

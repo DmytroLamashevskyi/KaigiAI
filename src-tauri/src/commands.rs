@@ -57,6 +57,13 @@ pub async fn set_conversation_langs(db: State<'_, Db>, id: String, lang_a: Strin
     db.set_conversation_langs(&id, &lang_a, &lang_b, updated_at).await.map_err(err)
 }
 
+/// Replace a conversation's full ordered language list (§10.7 N-language mode).
+/// The first two entries are mirrored into `lang_a`/`lang_b` for back-compat.
+#[tauri::command]
+pub async fn set_languages(db: State<'_, Db>, id: String, langs: Vec<String>, updated_at: i64) -> CmdResult<()> {
+    db.set_languages(&id, &langs, updated_at).await.map_err(err)
+}
+
 #[tauri::command]
 pub async fn set_speaker_names(db: State<'_, Db>, id: String, names_json: String, updated_at: i64) -> CmdResult<()> {
     db.set_speaker_names(&id, &names_json, updated_at).await.map_err(err)
@@ -87,7 +94,11 @@ pub async fn save_settings(db: State<'_, Db>, mut settings: serde_json::Value) -
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    if !api_key.is_empty() {
+    if !api_key.is_empty()
+        && crate::keychain::get_api_key().as_deref() != Some(api_key.as_str())
+    {
+        // Only touch the OS keychain when the key actually changed — otherwise
+        // every unrelated settings edit re-writes the secret needlessly.
         crate::keychain::set_api_key(&api_key);
     }
     set_str(&mut settings, "apiKey", String::new());
@@ -121,7 +132,7 @@ pub async fn summarize_conversation(
     lang: String,
 ) -> CmdResult<String> {
     let messages = db.list_messages(&conversation_id).await.map_err(err)?;
-    let transcript = messages
+    let mut transcript = messages
         .iter()
         .map(|m| {
             if m.translated_text.is_empty() {
@@ -132,6 +143,17 @@ pub async fn summarize_conversation(
         })
         .collect::<Vec<_>>()
         .join("\n\n");
+    // Cap a very long meeting so it doesn't blow the LLM context / time out; keep
+    // the most recent text (truncate from the front on a char boundary).
+    const MAX_SUMMARY_CHARS: usize = 24_000;
+    if transcript.chars().count() > MAX_SUMMARY_CHARS {
+        let start = transcript
+            .char_indices()
+            .nth(transcript.chars().count() - MAX_SUMMARY_CHARS)
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        transcript = format!("…\n{}", &transcript[start..]);
+    }
     let mut settings = db.get_app_settings().await.map_err(err)?;
     inject_api_key(&mut settings);
     if provider::translation_is_local(&settings) {
@@ -199,6 +221,15 @@ pub async fn export_zip(
     std::fs::create_dir_all(&dir).map_err(err)?;
     let zip_path = dir.join(format!("{}.zip", sanitize_filename(&title)));
 
+    // Defense-in-depth: only bundle audio clips that actually live under the
+    // app's audio directory, so a tampered DB path can't leak arbitrary files.
+    let audio_dir = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("audio"))
+        .and_then(|d| std::fs::canonicalize(d).ok());
+
     let file = std::fs::File::create(&zip_path).map_err(err)?;
     let mut zip = zip::ZipWriter::new(file);
     let opts = zip::write::SimpleFileOptions::default();
@@ -207,6 +238,14 @@ pub async fn export_zip(
     zip.write_all(markdown.as_bytes()).map_err(err)?;
 
     for (message_id, path) in clips {
+        let inside = match (&audio_dir, std::fs::canonicalize(&path)) {
+            (Some(base), Ok(canon)) => canon.starts_with(base),
+            _ => false,
+        };
+        if !inside {
+            log::warn!("skip audio clip outside audio dir: {path}");
+            continue;
+        }
         match std::fs::read(&path) {
             Ok(bytes) => {
                 let name = format!("audio/{message_id}.wav");
@@ -306,7 +345,8 @@ pub async fn start_recording(
     // Spawn only the sidecars the chosen modes need: whisper for local STT,
     // llama for local translation. A mixed setup (e.g. local speech + cloud
     // translation) starts just one.
-    if provider::stt_is_local(&settings) {
+    let stt_local = provider::stt_is_local(&settings);
+    if stt_local {
         let stt = sidecars.ensure_whisper(&settings)?;
         set_str(&mut settings, "localSttBaseUrl", stt);
     }
@@ -314,7 +354,14 @@ pub async fn start_recording(
         let llm = sidecars.ensure_llama(&settings)?;
         set_str(&mut settings, "localLlmBaseUrl", llm);
     }
-    recorder.start(app, db.inner().clone(), conv, settings)
+    let res = recorder.start(app, db.inner().clone(), conv, settings);
+    if res.is_err() && stt_local {
+        // Recording failed to start (e.g. no audio device) after we spawned the
+        // whisper server — kill it so it doesn't sit holding VRAM all session.
+        // (llama is left for reuse since text translation may share it.)
+        sidecars.kill_whisper();
+    }
+    res
 }
 
 #[tauri::command]

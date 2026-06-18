@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -15,18 +16,22 @@ import type {
   SetupIssue,
   View,
 } from "../types";
-import { speakerMap } from "../types";
+import { conversationLangs, speakerMap } from "../types";
 import { getBackend } from "../backend";
 import { isRtl } from "../i18n";
 import { useRecordingEvents } from "./useRecordingEvents";
 import {
   conversationMarkdown,
   conversationPrintHtml,
-  detectMessageSide,
+  detectMessageLang,
   logErr,
   makeId,
   migrateSettings,
 } from "./helpers";
+
+/** Max conversation languages (§10.7). Beyond this the N-way translation fan-out
+ *  and column grid stop being legible. */
+export const MAX_LANGS = 5;
 
 const DEFAULT_SETTINGS: Settings = {
   appLanguage: "ru",
@@ -97,12 +102,18 @@ interface AppContextValue {
   updateSettings: (patch: Partial<Settings>) => void;
   setConversationLangs: (langA: string, langB: string) => void;
   swapLanguages: () => void;
+  /** Replace the active conversation's full ordered language list (§10.7). Adding
+   *  a language only affects *new* messages; existing rows aren't back-translated. */
+  setLanguages: (langs: string[]) => void;
   addTextMessage: (text: string) => void;
   renameConversation: (id: string, title: string) => void;
   renameSpeaker: (label: string, name: string) => void;
   /** Reassign a single message to a different speaker label (manual diarization
    *  fix). `label` null clears the attribution. */
   reassignSpeaker: (messageId: string, label: string | null) => void;
+  /** Flip a message to the other pair language (fixes a mis-detected side, e.g.
+   *  typed text in a same-script pair) and re-translate. */
+  reassignMessageLang: (messageId: string) => void;
   deleteConversation: (id: string) => void;
   /** Export modal: conversation id being exported, or null when closed. */
   exportId: string | null;
@@ -155,6 +166,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     backend.checkSetup().then(setSetupIssues).catch(logErr("checkSetup failed"));
   }, [backend]);
 
+  // Debounced variant for settings edits: every keystroke in a path/key field
+  // calls updateSettings, and running the file-stat readiness check on each one
+  // would thrash the filesystem (esp. network paths). Coalesce to one check.
+  const recheckTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const recheckSetupDebounced = useCallback(() => {
+    if (recheckTimer.current) clearTimeout(recheckTimer.current);
+    recheckTimer.current = setTimeout(recheckSetup, 400);
+  }, [recheckSetup]);
+
+  // Always-current recording flag for event handlers (avoids stale closures and
+  // lets late events be ignored once recording has stopped).
+  const recordingRef = useRef(false);
+  recordingRef.current = recording;
+
   useEffect(() => {
     let cancelled = false;
     backend
@@ -192,9 +217,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setSetupIssues(issues);
             if (issues.length === 0) {
               if (!merged.onboarded) {
-                const next = { ...merged, onboarded: true };
-                setSettings(next);
-                backend.saveSettings(next).catch(logErr("saveSettings failed"));
+                // Merge into CURRENT state (not the stale `merged` snapshot) so
+                // any settings the user edited while checkSetup was in flight
+                // aren't clobbered.
+                setSettings((prev) => {
+                  const next = { ...prev, onboarded: true };
+                  backend.saveSettings(next).catch(logErr("saveSettings failed"));
+                  return next;
+                });
               }
             } else if (!merged.onboarded) {
               setWizardOpen(true);
@@ -209,7 +239,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [backend]);
 
   // Live recording events (transcript rows, errors, §10.8 placeholders).
-  useRecordingEvents(backend, { setMessages, setPending, setConversations, setError });
+  useRecordingEvents(backend, {
+    setMessages,
+    setPending,
+    setConversations,
+    setError,
+    recordingRef,
+  });
 
   // Stop leaves no segment in flight; clear any stragglers so a stale
   // placeholder never lingers after recording ends.
@@ -319,6 +355,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           title: "Новый диалог",
           langA: settings.defaultLangA,
           langB: settings.defaultLangB,
+          langs: [settings.defaultLangA, settings.defaultLangB],
           createdAt: ts,
           updatedAt: ts,
         };
@@ -340,15 +377,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateSettings: (patch) => {
         const next = { ...settings, ...patch };
         setSettings(next);
-        backend
-          .saveSettings(next)
-          .then(recheckSetup)
-          .catch(logErr("saveSettings failed"));
+        // Persist immediately (the backend reads settings from the DB when
+        // starting a recording), but debounce the file-stat readiness check so
+        // per-keystroke path edits don't thrash the filesystem.
+        backend.saveSettings(next).catch(logErr("saveSettings failed"));
+        recheckSetupDebounced();
       },
       setConversationLangs: (langA, langB) => {
         if (!activeId) return;
         const ts = Date.now();
-        patchConversation(activeId, { langA, langB, updatedAt: ts });
+        // Keep `langs` in lockstep with the 2-language selector (mirrors the DB).
+        patchConversation(activeId, { langA, langB, langs: [langA, langB], updatedAt: ts });
         backend
           .setConversationLangs(activeId, langA, langB, ts)
           .catch(logErr("setConversationLangs failed"));
@@ -358,28 +397,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const ts = Date.now();
         const langA = activeConversation.langB;
         const langB = activeConversation.langA;
-        patchConversation(activeId, { langA, langB, updatedAt: ts });
+        patchConversation(activeId, { langA, langB, langs: [langA, langB], updatedAt: ts });
         backend
           .setConversationLangs(activeId, langA, langB, ts)
           .catch(logErr("swapLanguages failed"));
+      },
+      setLanguages: (langs) => {
+        if (!activeId) return;
+        // Drop blanks/dupes and cap; the first two mirror into langA/langB.
+        const cleaned = langs
+          .map((l) => l.trim())
+          .filter((l, i, a) => l && a.indexOf(l) === i)
+          .slice(0, MAX_LANGS);
+        if (cleaned.length < 2) return;
+        const ts = Date.now();
+        patchConversation(activeId, {
+          langs: cleaned,
+          langA: cleaned[0],
+          langB: cleaned[1],
+          updatedAt: ts,
+        });
+        backend
+          .setLanguages(activeId, cleaned, ts)
+          .catch(logErr("setLanguages failed"));
       },
       addTextMessage: (text) => {
         if (!activeId || !activeConversation || !text.trim()) return;
         const id = makeId();
         const ts = Date.now();
         const trimmed = text.trim();
+        const convId = activeId;
+        const langs = conversationLangs(activeConversation);
         // Detect which language was typed by script, so the text lands in the
         // right column and is translated the right way (e.g. English typed into
         // a RU↔EN chat → EN side, translate into RU — not "treat as RU").
-        const side = detectMessageSide(
-          trimmed,
-          activeConversation.langA,
-          activeConversation.langB
-        );
-        const detectedLang =
-          side === "A" ? activeConversation.langA : activeConversation.langB;
-        const to =
-          side === "A" ? activeConversation.langB : activeConversation.langA;
+        const detectedLang = detectMessageLang(trimmed, langs);
         const msg: Message = {
           id,
           conversationId: activeId,
@@ -398,20 +450,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }));
         patchConversation(activeId, { updatedAt: ts });
         backend.addMessage(msg).catch(logErr("addMessage failed"));
-        const convId = activeId;
-        backend
-          .translate(msg.originalText, detectedLang, to)
-          .then((translatedText) => {
-            const updated = { ...msg, translatedText };
-            setMessages((prev) => ({
-              ...prev,
-              [convId]: (prev[convId] ?? []).map((m) =>
-                m.id === id ? updated : m
-              ),
-            }));
-            backend.addMessage(updated).catch(logErr("persist translation failed"));
-          })
-          .catch(logErr("translate failed"));
+        const patch = (m: Message) =>
+          setMessages((prev) => ({
+            ...prev,
+            [convId]: (prev[convId] ?? []).map((x) => (x.id === id ? m : x)),
+          }));
+        // Translate into every other conversation language (§10.7); for a
+        // 2-language chat this is a single call, for 3+ it fans out and fills the
+        // per-language `translations` map the grid reads.
+        const targets = langs.filter((l) => l !== detectedLang);
+        Promise.all(
+          targets.map((to) =>
+            backend
+              .translate(trimmed, detectedLang, to)
+              .then((t) => [to, t] as const)
+              .catch((e) => {
+                logErr("translate failed")(e);
+                return [to, ""] as const;
+              })
+          )
+        ).then((pairs) => {
+          const translations: Record<string, string> = {};
+          for (const [to, t] of pairs) if (t) translations[to] = t;
+          const updated: Message = {
+            ...msg,
+            translations,
+            // Legacy column: the first other language (keeps the 2-column view
+            // and export working for 2-language chats).
+            translatedText: targets.length ? translations[targets[0]] ?? "" : "",
+          };
+          patch(updated);
+          backend.addMessage(updated).catch(logErr("persist translation failed"));
+        });
       },
       renameConversation: (id, title) => {
         const t = title.trim();
@@ -446,6 +516,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
           };
         });
         backend.setMessageSpeaker(messageId, label).catch(logErr("setMessageSpeaker failed"));
+      },
+      reassignMessageLang: (messageId) => {
+        if (!activeId || !activeConversation) return;
+        const { langA, langB } = activeConversation;
+        const m = (messages[activeId] ?? []).find((x) => x.id === messageId);
+        // Only meaningful for a pair-language row (foreign rows have their own
+        // two-column layout); flip A<->B and re-translate the original.
+        if (!m || (m.detectedLang !== langA && m.detectedLang !== langB)) return;
+        const newLang = m.detectedLang === langA ? langB : langA;
+        const to = newLang === langA ? langB : langA;
+        const convId = activeId;
+        const flipped = { ...m, detectedLang: newLang, translatedText: "" };
+        const apply = (msg: Message) =>
+          setMessages((prev) => ({
+            ...prev,
+            [convId]: (prev[convId] ?? []).map((x) => (x.id === messageId ? msg : x)),
+          }));
+        apply(flipped); // optimistic: moves to the other column immediately
+        backend.addMessage(flipped).catch(logErr("reassign persist failed"));
+        backend
+          .translate(m.originalText, newLang, to)
+          .then((translatedText) => {
+            const done = { ...flipped, translatedText };
+            apply(done);
+            backend.addMessage(done).catch(logErr("reassign translate persist failed"));
+          })
+          .catch(logErr("reassign translate failed"));
       },
       deleteConversation: (id) => {
         setConversations((prev) => prev.filter((c) => c.id !== id));
@@ -495,16 +592,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
           border: "0",
         });
         document.body.appendChild(iframe);
+        const cleanup = () => {
+          if (iframe.parentNode) iframe.remove();
+        };
         const cw = iframe.contentWindow;
         if (cw) {
           cw.document.open();
           cw.document.write(html);
           cw.document.close();
-          cw.onafterprint = () => setTimeout(() => iframe.remove(), 300);
+          cw.onafterprint = () => setTimeout(cleanup, 300);
           setTimeout(() => {
             cw.focus();
             cw.print();
           }, 250);
+          // Fallback: onafterprint doesn't fire if the user cancels the print
+          // dialog, so remove the iframe unconditionally after a while to avoid
+          // leaking the full transcript HTML in the DOM.
+          setTimeout(cleanup, 60_000);
+        } else {
+          cleanup();
         }
         setExportId(null);
       },
@@ -534,7 +640,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       },
     };
-  }, [backend, patchConversation, recheckSetup, conversations, messages, activeId, view, settings, recording, preparing, error, notice, summaryOpen, exportId, setupIssues, wizardOpen, pending]);
+  }, [backend, patchConversation, recheckSetup, recheckSetupDebounced, conversations, messages, activeId, view, settings, recording, preparing, error, notice, summaryOpen, exportId, setupIssues, wizardOpen, pending]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

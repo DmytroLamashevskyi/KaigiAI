@@ -10,12 +10,24 @@ interface Props {
 }
 
 /** System wall-clock time the message was recorded (HH:MM:SS, local). The full
- *  date/time shows on hover so it's clear *when* something was said. */
-function RowTime({ createdAt }: { createdAt: number }) {
+ *  date/time shows on hover so it's clear *when* something was said. `onFlip`,
+ *  when given, adds a tiny control to move the row to the other language/side
+ *  (fixes a mis-detected typed message). */
+function RowTime({ createdAt, onFlip }: { createdAt: number; onFlip?: () => void }) {
   const d = new Date(createdAt);
   return (
     <div className="row-time" title={d.toLocaleString()}>
       {d.toLocaleTimeString()}
+      {onFlip && (
+        <button
+          type="button"
+          className="row-flip"
+          title="Сменить сторону/язык реплики"
+          onClick={onFlip}
+        >
+          ⇄
+        </button>
+      )}
     </div>
   );
 }
@@ -43,7 +55,7 @@ function nextSpeakerLabel(labels: string[]): string {
 /** Speaker label on an utterance. Clicking opens a menu to either reassign this
  *  single utterance to another speaker (manual diarization fix, §10.9) or
  *  rename the speaker globally for the whole conversation (§10.6). */
-function SpeakerBadge({
+export function SpeakerBadge({
   conv,
   label,
   messageId,
@@ -165,6 +177,7 @@ function Cell({ isOriginal, text, conversation, speaker, messageId }: CellProps)
 }
 
 export default function TranscriptRow({ message, conversation }: Props) {
+  const { reassignMessageLang } = useApp();
   const { langA, langB } = conversation;
   // A "foreign" utterance was spoken in neither pair language (docs/PROJECT.md
   // §10.7, variant A): show the original full-width with a language badge, then
@@ -216,7 +229,10 @@ export default function TranscriptRow({ message, conversation }: Props) {
         speaker={message.speaker}
         messageId={message.id}
       />
-      <RowTime createdAt={message.createdAt} />
+      <RowTime
+        createdAt={message.createdAt}
+        onFlip={() => reassignMessageLang(message.id)}
+      />
       <Cell
         isOriginal={!spokenOnA}
         text={spokenOnA ? message.translatedText : message.originalText}

@@ -95,7 +95,7 @@ impl ApiProvider {
 
         if !resp.status().is_success() {
             let code = resp.status();
-            let detail = resp.text().await.unwrap_or_default();
+            let detail = short_detail(resp.text().await.unwrap_or_default());
             return Err(format!("API error {code}: {detail}"));
         }
 
@@ -190,7 +190,7 @@ impl SttProvider for ApiProvider {
 
         if !resp.status().is_success() {
             let code = resp.status();
-            let detail = resp.text().await.unwrap_or_default();
+            let detail = short_detail(resp.text().await.unwrap_or_default());
             // A 404 on the transcription route usually means the provider has no
             // speech-to-text endpoint at all (e.g. Gemini's OpenAI-compatible
             // layer) — a common misconfiguration worth calling out explicitly.
@@ -216,6 +216,19 @@ impl SttProvider for ApiProvider {
             text: parsed.text.trim().to_string(),
             lang,
         })
+    }
+}
+
+/// Trim a provider error body to a short, single-line snippet so a giant HTML/
+/// JSON error page doesn't fill the UI toast (the full body is still logged
+/// upstream via the recording error path).
+fn short_detail(body: String) -> String {
+    let one_line: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed: String = one_line.chars().take(200).collect();
+    if one_line.chars().count() > 200 {
+        format!("{trimmed}…")
+    } else {
+        trimmed
     }
 }
 

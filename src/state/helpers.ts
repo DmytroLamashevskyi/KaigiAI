@@ -1,5 +1,5 @@
 import type { Conversation, Message, ProviderMode, Settings } from "../types";
-import { displaySpeaker } from "../types";
+import { conversationLangs, displaySpeaker, textForLang } from "../types";
 import { languageName } from "../data/languages";
 
 /** A `.catch` handler that logs with a contextual prefix. */
@@ -17,7 +17,10 @@ export function makeId(): string {
 export function migrateSettings(s: Partial<Settings>): Partial<Settings> {
   const legacy = (s as { providerMode?: ProviderMode }).providerMode;
   if (legacy && s.sttMode === undefined && s.translationMode === undefined) {
-    return { ...s, sttMode: legacy, translationMode: legacy };
+    const next = { ...s, sttMode: legacy, translationMode: legacy };
+    // Drop the obsolete key so it doesn't linger in the persisted settings blob.
+    delete (next as { providerMode?: ProviderMode }).providerMode;
+    return next;
   }
   return s;
 }
@@ -64,16 +67,15 @@ function scriptFitsLang(script: Script, lang: string): boolean {
   return script === expected;
 }
 
-/** Which side ("A"/"B") typed text belongs to, by script — so manual input is
+/** Which conversation language typed text is in, by script — so manual input is
  *  placed in the right column and translated the right way (e.g. English typed
- *  into a RU↔EN chat goes to the EN side, not RU). Defaults to A when ambiguous. */
-export function detectMessageSide(text: string, langA: string, langB: string): "A" | "B" {
+ *  into a RU↔EN chat lands on EN, not RU; §10.7). Snaps to the single language
+ *  whose writing system matches; falls back to the first language when ambiguous. */
+export function detectMessageLang(text: string, langs: string[]): string {
   const script = dominantScript(text);
-  const aFits = scriptFitsLang(script, langA);
-  const bFits = scriptFitsLang(script, langB);
-  if (aFits && !bFits) return "A";
-  if (bFits && !aFits) return "B";
-  return "A";
+  const fits = langs.filter((l) => scriptFitsLang(script, l));
+  if (fits.length === 1) return fits[0];
+  return langs[0] ?? "";
 }
 
 function escapeHtml(s: string): string {
@@ -83,22 +85,27 @@ function escapeHtml(s: string): string {
     .replace(/>/g, "&gt;");
 }
 
-/** Markdown export of a conversation (used by the Export modal). */
+/** Markdown export of a conversation (used by the Export modal). Lists every
+ *  conversation language (§10.7): the original line, then a quote per other
+ *  language. A "foreign" original (spoken outside the language set) is tagged. */
 export function conversationMarkdown(conv: Conversation, msgs: Message[]): string {
+  const langs = conversationLangs(conv);
   const lines = [
     `# ${conv.title}`,
-    `${languageName(conv.langA)} ↔ ${languageName(conv.langB)}`,
+    langs.map(languageName).join(" ↔ "),
     "",
   ];
   for (const m of msgs) {
     const name = displaySpeaker(conv, m.speaker);
     const who = name ? `**${name}** ` : "";
-    const foreign =
-      m.detectedLang !== conv.langA && m.detectedLang !== conv.langB;
+    const foreign = !langs.includes(m.detectedLang);
     const tag = foreign ? `[${languageName(m.detectedLang)}] ` : "";
     lines.push(`\`${clockOf(m.createdAt)}\` ${who}${tag}${m.originalText}`);
-    if (m.translatedText) lines.push(`> ${m.translatedText}`);
-    if (foreign && m.translatedTextB) lines.push(`> ${m.translatedTextB}`);
+    for (const lang of langs) {
+      if (lang === m.detectedLang) continue;
+      const t = textForLang(m, lang, conv);
+      if (t) lines.push(`> ${t}`);
+    }
     lines.push("");
   }
   return lines.join("\n");
@@ -106,18 +113,20 @@ export function conversationMarkdown(conv: Conversation, msgs: Message[]): strin
 
 /** A self-printing HTML page for PDF export via the system print dialog. */
 export function conversationPrintHtml(conv: Conversation, msgs: Message[]): string {
+  const convLangs = conversationLangs(conv);
   const rows = msgs
     .map((m) => {
       const name = displaySpeaker(conv, m.speaker);
-      const foreign =
-        m.detectedLang !== conv.langA && m.detectedLang !== conv.langB;
+      const foreign = !convLangs.includes(m.detectedLang);
       const meta = [clockOf(m.createdAt), name, foreign ? languageName(m.detectedLang) : ""]
         .filter((x): x is string => !!x)
         .map(escapeHtml)
         .join(" · ");
-      const trans = [m.translatedText, foreign ? m.translatedTextB : ""]
+      const trans = convLangs
+        .filter((lang) => lang !== m.detectedLang)
+        .map((lang) => textForLang(m, lang, conv))
         .filter(Boolean)
-        .map((t) => `<div class="t">${escapeHtml(t as string)}</div>`)
+        .map((t) => `<div class="t">${escapeHtml(t)}</div>`)
         .join("");
       return `<div class="m"><div class="meta">${meta}</div><div class="o">${escapeHtml(
         m.originalText
@@ -125,9 +134,7 @@ export function conversationPrintHtml(conv: Conversation, msgs: Message[]): stri
     })
     .join("");
   const title = escapeHtml(conv.title);
-  const langs = `${escapeHtml(languageName(conv.langA))} ↔ ${escapeHtml(
-    languageName(conv.langB)
-  )}`;
+  const langs = convLangs.map((l) => escapeHtml(languageName(l))).join(" ↔ ");
   const date = escapeHtml(new Date().toLocaleString());
   return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
 <style>
