@@ -7,8 +7,9 @@
 слабых ПК.
 
 Стек: **Tauri v2 + Rust-ядро + React 18 / TypeScript (Vite)**. Интерфейс в стиле
-Claude Desktop. Подробный дизайн — в [docs/PROJECT.md](docs/PROJECT.md);
-чек-лист ручной проверки — в [docs/TESTING.md](docs/TESTING.md).
+Claude Desktop. Руководство пользователя — в [docs/USER-GUIDE.md](docs/USER-GUIDE.md);
+подробный дизайн — в [docs/PROJECT.md](docs/PROJECT.md); чек-лист ручной проверки —
+в [docs/TESTING.md](docs/TESTING.md).
 
 ## Возможности
 
