@@ -1,3 +1,5 @@
+import type { Backend } from "../backend";
+import { getBackend } from "../backend";
 import type { Conversation, Message, ProviderMode, Settings } from "../types";
 import { conversationLangs, displaySpeaker, textForLang } from "../types";
 import { languageName } from "../data/languages";
@@ -5,6 +7,47 @@ import { languageName } from "../data/languages";
 /** A `.catch` handler that logs with a contextual prefix. */
 export function logErr(context: string): (e: unknown) => void {
   return (e) => console.error(context, e);
+}
+
+/** User-facing message for an unknown thrown value (used for the error toast). */
+export function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** Translate `text` into every target language, resolving to a langCode→text
+ *  map (§10.7). A failed target logs under `errContext` and is simply absent
+ *  from the map, so one bad language never rejects the whole fan-out. Callers
+ *  own the persistence ordering around this — see addTextMessage/setMessageLang. */
+export function translateAll(
+  backend: Pick<Backend, "translate">,
+  text: string,
+  from: string,
+  targets: string[],
+  errContext: string
+): Promise<Record<string, string>> {
+  return Promise.all(
+    targets.map((to) =>
+      backend
+        .translate(text, from, to)
+        .then((t) => [to, t] as const)
+        .catch((e) => {
+          logErr(errContext)(e);
+          return [to, ""] as const;
+        })
+    )
+  ).then((pairs) => {
+    const translations: Record<string, string> = {};
+    for (const [to, t] of pairs) if (t) translations[to] = t;
+    return translations;
+  });
+}
+
+/** Open (or reveal) a presentation window. Routes through the backend: a native
+ *  Tauri window in the desktop app, or window.open in the browser (window.open
+ *  doesn't work in the Tauri webview). `title` is the language name shown in
+ *  the window caption. */
+export function openPresentWindow(slot: "A" | "B", title: string): void {
+  getBackend().openPresent(slot, title).catch(logErr("openPresent failed"));
 }
 
 /** Short random id for client-created conversations/messages. */

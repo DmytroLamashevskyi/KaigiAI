@@ -15,6 +15,24 @@ interface Setters {
   recordingRef: MutableRefObject<boolean>;
 }
 
+/** Race-safe unsubscribe plumbing for a backend event subscription: if the
+ *  effect is torn down before the subscribe promise resolves, the listener is
+ *  released the moment it arrives instead of leaking. Returns the cleanup. */
+function subscribe(sub: Promise<() => void>, tag: string): () => void {
+  let unlisten: (() => void) | undefined;
+  let cancelled = false;
+  sub
+    .then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    })
+    .catch(logErr(tag));
+  return () => {
+    cancelled = true;
+    unlisten?.();
+  };
+}
+
 /** Subscribe to the Rust recording pipeline's live events — transcript rows,
  *  non-fatal errors, and the §10.8 placeholder lifecycle — wiring each into the
  *  provided state setters. Extracted from AppProvider to keep it readable. */
@@ -22,63 +40,45 @@ export function useRecordingEvents(backend: Backend, s: Setters): void {
   const { setMessages, setPending, setConversations, setError, recordingRef } = s;
 
   // Live transcript messages emitted by the Rust recording pipeline.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    backend
-      .onTranscriptMessage((m, pendingId) => {
-        setMessages((prev) => {
-          const list = prev[m.conversationId] ?? [];
-          const i = list.findIndex((x) => x.id === m.id);
-          const next = i >= 0 ? list.map((x) => (x.id === m.id ? m : x)) : [...list, m];
-          return { ...prev, [m.conversationId]: next };
-        });
-        // The real row replaces its in-flight placeholder (§10.8).
-        if (pendingId !== undefined) {
-          setPending((prev) => prev.filter((p) => p.pendingId !== pendingId));
-        }
-        setConversations((prev) =>
-          prev.map((c) =>
-            c.id === m.conversationId ? { ...c, updatedAt: m.createdAt } : c
-          )
-        );
-      })
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      })
-      .catch(logErr("transcript subscription failed"));
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [backend, setMessages, setPending, setConversations]);
+  useEffect(
+    () =>
+      subscribe(
+        backend.onTranscriptMessage((m, pendingId) => {
+          setMessages((prev) => {
+            const list = prev[m.conversationId] ?? [];
+            const i = list.findIndex((x) => x.id === m.id);
+            const next = i >= 0 ? list.map((x) => (x.id === m.id ? m : x)) : [...list, m];
+            return { ...prev, [m.conversationId]: next };
+          });
+          // The real row replaces its in-flight placeholder (§10.8).
+          if (pendingId !== undefined) {
+            setPending((prev) => prev.filter((p) => p.pendingId !== pendingId));
+          }
+          setConversations((prev) =>
+            prev.map((c) =>
+              c.id === m.conversationId ? { ...c, updatedAt: m.createdAt } : c
+            )
+          );
+        }),
+        "transcript subscription failed"
+      ),
+    [backend, setMessages, setPending, setConversations]
+  );
 
   // Non-fatal recording errors (STT/translation), shown as a dismissible toast.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    backend
-      .onRecordingError((message) => setError(message))
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      })
-      .catch(logErr("error subscription failed"));
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [backend, setError]);
+  useEffect(
+    () =>
+      subscribe(
+        backend.onRecordingError((message) => setError(message)),
+        "error subscription failed"
+      ),
+    [backend, setError]
+  );
 
   // Live placeholders (§10.8). A pause raises a "silence" bar that fills over
   // `hangoverMs`; if the speaker resumes it's cancelled, otherwise it flips to
   // a "processing" shimmer until the real message (or a cancel) arrives.
   useEffect(() => {
-    let unlistenSilence: (() => void) | undefined;
-    let unlistenPending: (() => void) | undefined;
-    let unlistenCancelled: (() => void) | undefined;
-    let cancelled = false;
     // Insert or update the placeholder for `pendingId`, restarting the phase
     // clock so the CSS bar animates from the new phase's start. Ignored once
     // recording has stopped — a late silence/pending event must not re-raise a
@@ -93,40 +93,37 @@ export function useRecordingEvents(backend: Backend, s: Setters): void {
         return copy;
       });
     };
-    backend
-      .onSegmentSilence((p) => {
-        upsert({
-          pendingId: p.pendingId,
-          conversationId: p.conversationId,
-          phase: "silence",
-          hangoverMs: p.hangoverMs,
-          since: Date.now(),
-        });
-      })
-      .then((fn) => (cancelled ? fn() : (unlistenSilence = fn)))
-      .catch(logErr("segment-silence subscription failed"));
-    backend
-      .onSegmentPending((p) => {
-        upsert({
-          pendingId: p.pendingId,
-          conversationId: p.conversationId,
-          phase: "processing",
-          since: Date.now(),
-        });
-      })
-      .then((fn) => (cancelled ? fn() : (unlistenPending = fn)))
-      .catch(logErr("segment-pending subscription failed"));
-    backend
-      .onSegmentCancelled((pendingId) => {
-        setPending((prev) => prev.filter((p) => p.pendingId !== pendingId));
-      })
-      .then((fn) => (cancelled ? fn() : (unlistenCancelled = fn)))
-      .catch(logErr("segment-cancelled subscription failed"));
-    return () => {
-      cancelled = true;
-      unlistenSilence?.();
-      unlistenPending?.();
-      unlistenCancelled?.();
-    };
+    const stops = [
+      subscribe(
+        backend.onSegmentSilence((p) => {
+          upsert({
+            pendingId: p.pendingId,
+            conversationId: p.conversationId,
+            phase: "silence",
+            hangoverMs: p.hangoverMs,
+            since: Date.now(),
+          });
+        }),
+        "segment-silence subscription failed"
+      ),
+      subscribe(
+        backend.onSegmentPending((p) => {
+          upsert({
+            pendingId: p.pendingId,
+            conversationId: p.conversationId,
+            phase: "processing",
+            since: Date.now(),
+          });
+        }),
+        "segment-pending subscription failed"
+      ),
+      subscribe(
+        backend.onSegmentCancelled((pendingId) => {
+          setPending((prev) => prev.filter((p) => p.pendingId !== pendingId));
+        }),
+        "segment-cancelled subscription failed"
+      ),
+    ];
+    return () => stops.forEach((stop) => stop());
   }, [backend, setPending, recordingRef]);
 }

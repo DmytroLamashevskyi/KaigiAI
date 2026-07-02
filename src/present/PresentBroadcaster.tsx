@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
 import { useApp } from "../state/AppState";
-import { FONT_SCALE } from "../data/fontSize";
 import { conversationLangs, textForLang } from "../types";
 import type { PresentState } from "./channel";
 import { onPresentHello, postPresentState } from "./transport";
@@ -17,8 +16,6 @@ export default function PresentBroadcaster() {
   stateRef.current = {
     type: "state",
     locale: settings.appLanguage,
-    theme: settings.theme,
-    fontScale: FONT_SCALE[settings.fontSize],
     langs,
     recording,
     rows: activeConversation
@@ -45,10 +42,13 @@ export default function PresentBroadcaster() {
     []
   );
 
-  // Push every time the mirrored state changes.
+  // Push every time the mirrored state changes. Depends only on the settings
+  // field the payload actually carries (appLanguage) — depending on the whole
+  // settings object would re-broadcast the entire transcript over the Tauri
+  // event bus on every keystroke in a Settings text field.
   useEffect(() => {
     if (stateRef.current) postPresentState(stateRef.current);
-  }, [activeConversation, activeMessages, settings, recording]);
+  }, [activeConversation, activeMessages, settings.appLanguage, recording]);
 
   return null;
 }

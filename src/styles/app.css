@@ -144,7 +144,10 @@
   background: rgba(192, 57, 43, 0.1);
 }
 
-.menu-backdrop {
+/* Click-away backdrop under popup menus (the menus are z-index 21). */
+.menu-backdrop,
+.speaker-menu-backdrop,
+.lang-picker-backdrop {
   position: fixed;
   inset: 0;
   z-index: 20;
@@ -225,20 +228,12 @@
   background: var(--bg-surface-2);
 }
 
-.lang-selectors {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .lang-select {
   appearance: none;
   padding: 7px 28px 7px 12px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-strong);
-  background: var(--bg-surface)
-    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239a9892' stroke-width='2'><path d='M6 9l6 6 6-6'/></svg>")
-    no-repeat right 9px center;
+  background: var(--bg-surface) var(--select-chevron) no-repeat right 9px center;
   font-weight: 550;
   cursor: pointer;
 }
@@ -316,7 +311,7 @@
   background: #fff;
 }
 .record-btn.recording {
-  background: #b5573a;
+  background: var(--status-error);
 }
 .record-btn.recording .rec-dot {
   animation: pulse 1.1s infinite;
@@ -365,7 +360,7 @@
 /* Column headers */
 .col-headers {
   display: grid;
-  grid-template-columns: 1fr 56px 1fr;
+  grid-template-columns: var(--pane-grid);
   column-gap: 10px;
   padding: 10px 24px 6px;
   border-bottom: 1px solid var(--border);
@@ -429,32 +424,46 @@
 
 .transcript-row {
   display: grid;
-  grid-template-columns: 1fr 56px 1fr;
+  grid-template-columns: var(--pane-grid);
   align-items: start;
   /* Small horizontal gap so the centered timestamp never touches the bubbles. */
   column-gap: 10px;
 }
 
-.cell {
-  position: relative;
+/* Shared transcript bubble — classic 2-pane (.cell) and N-lang grid (.grid-cell). */
+.cell,
+.grid-cell {
   padding: 10px 14px;
   border-radius: var(--radius-md);
   font-size: calc(14.5px * var(--fs-scale, 1));
   line-height: 1.55;
 }
-.cell.original {
+.cell {
+  position: relative; /* anchor for .orig-dot */
+}
+.grid-cell {
+  border: 1px solid transparent; /* reserves space; NOT on .cell (border-box would shrink it) */
+  color: var(--text-secondary);
+}
+.cell.original,
+.grid-cell.original {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-sm);
   font-weight: 480;
 }
+.grid-cell.original {
+  color: var(--text-primary);
+}
 .cell.translation {
   color: var(--text-secondary);
 }
-.cell .cell-text {
+.cell .cell-text,
+.grid-cell-text {
   white-space: pre-wrap;
 }
-.cell .pending {
+.cell .pending,
+.grid-cell-text .pending {
   color: var(--text-muted);
 }
 
@@ -468,19 +477,26 @@
   background: var(--accent);
 }
 
-.speaker-badge {
-  display: inline-flex;
-  align-items: center;
+/* Shared pill geometry: speaker badge, its inline edit input, and the
+   foreign-language badge (see .lang-badge below). */
+.speaker-badge,
+.speaker-edit,
+.lang-badge {
   margin-right: 6px;
   padding: 1px 8px;
-  border: none;
   border-radius: 9px;
-  background: var(--accent-soft);
-  color: var(--accent);
   font-size: 11px;
   font-weight: 650;
   line-height: 1.5;
   vertical-align: middle;
+}
+
+.speaker-badge {
+  display: inline-flex;
+  align-items: center;
+  border: none;
+  background: var(--accent-soft);
+  color: var(--accent);
   cursor: pointer;
 }
 .speaker-badge:hover {
@@ -488,16 +504,9 @@
 }
 
 .speaker-edit {
-  margin-right: 6px;
-  padding: 1px 8px;
   border: 1px solid var(--accent);
-  border-radius: 9px;
   background: var(--bg-surface);
   color: var(--text-primary);
-  font-size: 11px;
-  font-weight: 650;
-  line-height: 1.5;
-  vertical-align: middle;
   width: 9ch;
 }
 
@@ -506,11 +515,7 @@
   display: inline-block;
 }
 
-.speaker-menu-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-}
+/* .speaker-menu-backdrop shares the click-away backdrop rule (see .menu-backdrop). */
 
 .speaker-menu {
   position: absolute;
@@ -521,7 +526,7 @@
   padding: 4px;
   background: var(--bg-surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
 }
 
@@ -539,7 +544,7 @@
   width: 100%;
   padding: 5px 8px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-primary);
   font-size: 12px;
@@ -563,10 +568,9 @@
   text-align: center;
   padding-top: 12px;
 }
-/* Tiny "move to the other side/language" control, revealed on row hover. */
-.row-flip {
-  display: block;
-  margin: 4px auto 0;
+/* Tiny hover-revealed ⇄ control: 2-pane row flip and N-lang grid reassign. */
+.row-flip,
+.lang-reassign-btn {
   width: 20px;
   height: 20px;
   border-radius: 50%;
@@ -576,10 +580,16 @@
   opacity: 0;
   transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
 }
-.transcript-row:hover .row-flip {
+.row-flip {
+  display: block;
+  margin: 4px auto 0;
+}
+.transcript-row:hover .row-flip,
+.grid-msg:hover .lang-reassign-btn {
   opacity: 0.7;
 }
-.row-flip:hover {
+.row-flip:hover,
+.lang-reassign-btn:hover {
   opacity: 1;
   background: var(--bg-hover);
   color: var(--accent);
@@ -652,23 +662,17 @@
 }
 .foreign-translations {
   display: grid;
-  grid-template-columns: 1fr 56px 1fr;
+  grid-template-columns: var(--pane-grid);
   align-items: start;
   column-gap: 10px;
   margin-top: 4px;
 }
+/* Pill geometry comes from the shared rule next to .speaker-badge. */
 .lang-badge {
   display: inline-flex;
   align-items: center;
-  margin-right: 6px;
-  padding: 1px 8px;
-  border-radius: 9px;
   background: var(--border);
   color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 650;
-  line-height: 1.5;
-  vertical-align: middle;
   text-transform: uppercase;
   letter-spacing: 0.02em;
 }
@@ -847,7 +851,7 @@
 .settings-select {
   appearance: none;
   cursor: pointer;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239a9892' stroke-width='2'><path d='M6 9l6 6 6-6'/></svg>");
+  background-image: var(--select-chevron);
   background-repeat: no-repeat;
   background-position: right 10px center;
   padding-right: 30px;
@@ -971,7 +975,11 @@
   background: var(--bg-surface);
   transition: border-color 0.12s ease, background 0.12s ease;
 }
-.scenario-card:hover {
+/* Shared hover for selectable option cards (wizard scenarios, API presets,
+   export choices) — accent outline + soft fill. */
+.scenario-card:hover,
+.api-preset:hover,
+.export-choice:hover {
   border-color: var(--accent);
   background: var(--bg-hover);
 }
@@ -1020,10 +1028,7 @@
   background: var(--bg-surface);
   transition: border-color 0.12s ease, background 0.12s ease;
 }
-.api-preset:hover {
-  border-color: var(--accent);
-  background: var(--bg-hover);
-}
+/* .api-preset:hover shares the selectable-card rule (see .scenario-card:hover). */
 /* The card's clickable "select this provider" area (name + note). Separate from
    the "Get key" link so the two aren't nested interactive elements. */
 .api-preset-select {
@@ -1079,7 +1084,7 @@
   max-width: min(560px, calc(100vw - 40px));
   padding: 11px 14px;
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md, 0 6px 24px rgba(0, 0, 0, 0.18));
+  box-shadow: var(--shadow-md);
   font-size: 13px;
   line-height: 1.4;
   animation: toast-in 0.18s ease;
@@ -1095,14 +1100,10 @@
   }
 }
 .toast-error {
-  background: #fdecec;
-  border: 1px solid #f3c0c0;
-  color: #8a1f1f;
-}
-[data-theme="dark"] .toast-error {
-  background: #3a1d1d;
-  border-color: #6b2e2e;
-  color: #f4c7c7;
+  /* Theme switch is carried by the --error-* tokens (global.css). */
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  color: var(--error-text);
 }
 .toast-notice {
   background: #eaf6ec;
@@ -1158,14 +1159,18 @@
 .summary-btn:hover {
   background: var(--bg-surface-2);
 }
-/* Make the "Конспект" action stand out (accent-tinted) so it's easy to find. */
-.summary-btn.prominent {
-  border-color: var(--accent);
+/* Accent-outline archetype (inverts to solid accent on hover): the prominent
+   "Конспект" action and the settings' wizard-open button. No transition here —
+   .summary-btn animates via its base rule while .wizard-open-btn snaps. */
+.summary-btn.prominent,
+.wizard-open-btn {
+  border: 1px solid var(--accent);
   background: var(--bg-hover);
   color: var(--accent);
   font-weight: 600;
 }
-.summary-btn.prominent:hover {
+.summary-btn.prominent:hover,
+.wizard-open-btn:hover {
   background: var(--accent);
   color: #fff;
 }
@@ -1192,10 +1197,7 @@
   background: var(--bg-surface);
   transition: border-color 0.12s ease, background 0.12s ease;
 }
-.export-choice:hover {
-  border-color: var(--accent);
-  background: var(--bg-hover);
-}
+/* .export-choice:hover shares the selectable-card rule (see .scenario-card:hover). */
 .export-choice-icon {
   grid-row: 1 / 3;
   font-size: 24px;
@@ -1232,7 +1234,7 @@
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md, 0 12px 40px rgba(0, 0, 0, 0.28));
+  box-shadow: var(--shadow-md);
   overflow: hidden;
 }
 .modal-header {
@@ -1265,7 +1267,7 @@
   color: var(--text-secondary);
 }
 .summary-failed {
-  color: #b5573a;
+  color: var(--status-error);
 }
 .modal-footer {
   display: flex;
@@ -1341,10 +1343,10 @@
   background: var(--text-muted);
 }
 .present-status.live {
-  color: #e5484d;
+  color: var(--danger);
 }
 .present-status.live .present-dot {
-  background: #e5484d;
+  background: var(--danger);
   animation: present-pulse 1.4s ease-in-out infinite;
 }
 @keyframes present-pulse {
@@ -1443,14 +1445,10 @@
   align-items: center;
   gap: 12px;
   padding: 10px 20px;
-  background: #fdecec;
-  border-bottom: 1px solid #f3c0c0;
-  color: #8a1f1f;
-}
-[data-theme="dark"] .setup-banner {
-  background: #3a1d1d;
-  border-color: #6b2e2e;
-  color: #f4c7c7;
+  /* Theme switch is carried by the --error-* tokens (global.css). */
+  background: var(--error-bg);
+  border-bottom: 1px solid var(--error-border);
+  color: var(--error-text);
 }
 .setup-banner-icon {
   font-size: 16px;
@@ -1469,7 +1467,9 @@
   font-weight: 600;
   font-size: 13px;
 }
-.setup-banner-btn:hover {
+/* Shared accent-solid hover: setup-banner CTA and the wizard's primary button. */
+.setup-banner-btn:hover,
+.wiz-primary:hover {
   background: var(--accent-hover);
 }
 
@@ -1478,18 +1478,12 @@
   align-items: center;
   gap: 10px;
 }
+/* Accent-outline visuals + hover live in the shared rule next to
+   .summary-btn.prominent (transcript section). */
 .wizard-open-btn {
   padding: 6px 12px;
   border-radius: var(--radius-md);
-  border: 1px solid var(--accent);
-  background: var(--bg-hover);
-  color: var(--accent);
-  font-weight: 600;
   font-size: 13px;
-}
-.wizard-open-btn:hover {
-  background: var(--accent);
-  color: #fff;
 }
 
 .wizard-modal {
@@ -1537,7 +1531,7 @@
 .wiz-bad {
   font-size: 11.5px;
   font-weight: 600;
-  color: #b5573a;
+  color: var(--status-error);
 }
 .wizard-actions {
   display: flex;
@@ -1558,9 +1552,7 @@
   color: #fff;
   font-weight: 600;
 }
-.wiz-primary:hover {
-  background: var(--accent-hover);
-}
+/* .wiz-primary:hover shares the accent-solid hover rule (see .setup-banner-btn). */
 .wiz-secondary {
   padding: 9px 14px;
   border-radius: var(--radius-md);
@@ -1597,11 +1589,7 @@
   border-color: var(--accent);
   color: var(--accent);
 }
-.lang-picker-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-}
+/* .lang-picker-backdrop shares the click-away backdrop rule (see .menu-backdrop). */
 .lang-picker-menu {
   position: absolute;
   top: calc(100% + 4px);
@@ -1616,6 +1604,14 @@
   border: 1px solid var(--border);
   background: var(--bg-surface);
   box-shadow: var(--shadow-md);
+}
+.lang-picker-label {
+  padding: 4px 8px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
 }
 .lang-picker-item {
   display: block;
@@ -1638,10 +1634,15 @@
   flex: 1;
   min-height: 0;
 }
-.grid-headers {
+/* One N-column template for the header row and each message's cells; --cols is
+   set inline per element by TranscriptGrid (so no :root indirection here). */
+.grid-headers,
+.grid-cells {
   display: grid;
   grid-template-columns: repeat(var(--cols, 3), 1fr);
   column-gap: 10px;
+}
+.grid-headers {
   padding: 10px 24px 6px;
   border-bottom: 1px solid var(--border);
 }
@@ -1666,7 +1667,7 @@
 }
 .lang-remove-btn:hover {
   background: var(--bg-hover);
-  color: #e5484d;
+  color: var(--danger);
 }
 .grid-toolbar {
   display: flex;
@@ -1701,26 +1702,10 @@
   color: var(--text-secondary);
   white-space: pre-wrap;
 }
+/* .grid-cells layout comes from the shared .grid-headers/.grid-cells rule above;
+   cell bubble visuals are shared with .cell (transcript section). */
 .grid-cells {
-  display: grid;
-  grid-template-columns: repeat(var(--cols, 3), 1fr);
-  column-gap: 10px;
   align-items: start;
-}
-.grid-cell {
-  padding: 10px 14px;
-  border-radius: var(--radius-md);
-  border: 1px solid transparent;
-  font-size: calc(14.5px * var(--fs-scale, 1));
-  line-height: 1.55;
-  color: var(--text-secondary);
-}
-.grid-cell.original {
-  background: var(--bg-surface);
-  border-color: var(--border);
-  box-shadow: var(--shadow-sm);
-  color: var(--text-primary);
-  font-weight: 480;
 }
 .grid-cell-lang {
   font-size: 10px;
@@ -1730,41 +1715,18 @@
   color: var(--text-muted);
   margin-bottom: 3px;
 }
-.grid-cell-text {
-  white-space: pre-wrap;
-}
-.grid-cell-text .pending {
-  color: var(--text-muted);
-}
 /* Empty cell: a language with no stored translation (e.g. an old message after a
    language was added — history isn't back-translated, §10.7). */
 .grid-cell-empty {
   color: var(--text-muted);
 }
 
-/* Per-row "set spoken language" control (⇄), revealed on row hover. */
+/* Per-row "set spoken language" control (⇄): the button visuals live in the
+   shared hover-reveal rule next to .row-flip (transcript section). */
 .lang-reassign {
   position: relative;
   display: inline-flex;
   margin-left: auto;
-}
-.lang-reassign-btn {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1;
-  opacity: 0;
-  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
-}
-.grid-msg:hover .lang-reassign-btn {
-  opacity: 0.7;
-}
-.lang-reassign-btn:hover {
-  opacity: 1;
-  background: var(--bg-hover);
-  color: var(--accent);
 }
 .lang-reassign .lang-picker-menu {
   left: auto;

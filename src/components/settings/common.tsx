@@ -1,8 +1,57 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { getBackend } from "../../backend";
 import { LANGUAGES } from "../../data/languages";
-import type { DownloadLink } from "../../data/models";
+import { API_PROVIDERS, type DownloadLink } from "../../data/models";
 import { logErr } from "../../state/helpers";
+import type { Settings } from "../../types";
+import { useApp } from "../../state/AppState";
+
+/** Which provider tiers are in play for the current mode split — shared by the
+ *  settings section and the first-run wizard so the two can't drift. */
+export function deriveProviderModes(
+  s: Pick<Settings, "sttMode" | "translationMode">
+): { sttLocal: boolean; translationLocal: boolean; anyLocal: boolean; anyApi: boolean } {
+  const sttLocal = s.sttMode === "local";
+  const translationLocal = s.translationMode === "local";
+  return {
+    sttLocal,
+    translationLocal,
+    anyLocal: sttLocal || translationLocal,
+    anyApi: !sttLocal || !translationLocal,
+  };
+}
+
+/** The API-provider quick-setup cards (preset button + "get key" link), shared
+ *  verbatim by ProviderSection and the first-run wizard. `keyLabel` differs:
+ *  the settings section uses the i18n string, the wizard hardcodes Russian. */
+export function ApiPresets({ keyLabel }: { keyLabel: string }) {
+  const { updateSettings } = useApp();
+  return (
+    <div className="api-presets">
+      {API_PROVIDERS.map((p) => (
+        <div key={p.id} className="api-preset">
+          <button
+            type="button"
+            className="api-preset-select"
+            onClick={() => updateSettings({ apiBaseUrl: p.baseUrl })}
+          >
+            <span className="api-preset-name">{p.name}</span>
+            <span className="api-preset-note">{p.note}</span>
+          </button>
+          {p.keyUrl && (
+            <button
+              type="button"
+              className="api-key-link"
+              onClick={() => openExternal(p.keyUrl)}
+            >
+              {keyLabel}
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export interface AudioInput {
   value: string;

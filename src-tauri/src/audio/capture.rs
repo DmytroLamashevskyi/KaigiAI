@@ -13,7 +13,7 @@ use cpal::{Device, SampleFormat, StreamConfig};
 use super::vad::{Vad, VadConfig, VadEvent, SAMPLE_RATE};
 
 /// Where to capture audio from.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AudioSource {
     /// A microphone / line-in (WASAPI capture endpoint).
     Mic,

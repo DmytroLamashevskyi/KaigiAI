@@ -14,16 +14,10 @@ export interface PresentRow {
 export interface PresentState {
   type: "state";
   locale: string;
-  theme: "light" | "dark";
-  fontScale: number;
-  /** Conversation languages in order; the present window picks one to display. */
+  /** Conversation languages in order; the present window picks one to display.
+   *  Theme and text size are NOT carried here — each present window owns its
+   *  own toggles, persisted per window in localStorage. */
   langs: string[];
   recording: boolean;
   rows: PresentRow[];
 }
-
-export interface PresentHello {
-  type: "hello";
-}
-
-export type PresentMessage = PresentState | PresentHello;

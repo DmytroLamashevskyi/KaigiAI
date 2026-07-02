@@ -1,64 +1,16 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { type CSSProperties } from "react";
 import { useApp, MAX_LANGS } from "../state/AppState";
-import { getBackend } from "../backend";
-import { logErr } from "../state/helpers";
+import { openPresentWindow } from "../state/helpers";
 import type { Conversation } from "../types";
 import { conversationLangs, textForLang } from "../types";
 import { languageName, LANGUAGES } from "../data/languages";
 import { isRtl } from "../i18n";
+import { useAutoScroll } from "../hooks/useAutoScroll";
 import { useT } from "../i18n/useT";
 import { SpeakerBadge } from "./TranscriptRow";
-import PendingRow from "./PendingRow";
-
-/** A small ⇄ control on a grid row to correct which language an utterance was
- *  actually spoken in (N-language manual fix, §10.7) — re-translates into the
- *  rest. Replaces the 2-column view's binary flip for 3+ languages. */
-function LangReassign({
-  langs,
-  current,
-  onPick,
-}: {
-  langs: string[];
-  current: string;
-  onPick: (lang: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const others = langs.filter((l) => l !== current);
-  if (others.length === 0) return null;
-  return (
-    <span className="lang-reassign">
-      <button
-        type="button"
-        className="lang-reassign-btn"
-        title="Указать язык реплики"
-        onClick={() => setOpen((v) => !v)}
-      >
-        ⇄
-      </button>
-      {open && (
-        <>
-          <div className="lang-picker-backdrop" onClick={() => setOpen(false)} />
-          <div className="lang-picker-menu" role="menu">
-            <div className="speaker-menu-label">Язык реплики</div>
-            {others.map((l) => (
-              <button
-                key={l}
-                type="button"
-                className="lang-picker-item"
-                onClick={() => {
-                  onPick(l);
-                  setOpen(false);
-                }}
-              >
-                {languageName(l)}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-    </span>
-  );
-}
+import PendingRow, { TranscriptEmpty } from "./PendingRow";
+import LangPicker from "./LangPicker";
+import LangCodeSelect from "./LangCodeSelect";
 
 /** N-column transcript for conversations with 3+ languages (§10.7). Each message
  *  is a card whose columns hold the same utterance in every conversation
@@ -74,11 +26,10 @@ export default function TranscriptGrid({ conversation }: { conversation: Convers
     translatingIds,
   } = useApp();
   const t = useT();
-  const bodyRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight });
-  }, [activeMessages.length, activePending.length]);
+  const bodyRef = useAutoScroll<HTMLDivElement>([
+    activeMessages.length,
+    activePending.length,
+  ]);
 
   const langs = conversationLangs(conversation);
   const locked = activeMessages.length > 0;
@@ -100,13 +51,6 @@ export default function TranscriptGrid({ conversation }: { conversation: Convers
   };
   const addLang = (code: string) => setLanguages([...langs, code]);
 
-  // Two presentation windows, each shows the whole conversation and picks its
-  // own language from a dropdown (§10.7) — so the slots aren't tied to a column.
-  const openPresent = (slot: "A" | "B") =>
-    getBackend()
-      .openPresent(slot, languageName(langs[slot === "A" ? 0 : 1]))
-      .catch(logErr("openPresent failed"));
-
   return (
     <div className="transcript-grid">
       <div className="grid-headers" style={cols}>
@@ -115,21 +59,11 @@ export default function TranscriptGrid({ conversation }: { conversation: Convers
             {locked ? (
               <span className="col-head">{languageName(lang)}</span>
             ) : (
-              <select
-                className="lang-select"
+              <LangCodeSelect
                 value={lang}
-                onChange={(e) => changeLang(i, e.target.value)}
-              >
-                {LANGUAGES.map((l) => (
-                  <option
-                    key={l.code}
-                    value={l.code}
-                    disabled={langs.includes(l.code) && l.code !== lang}
-                  >
-                    {l.nativeName}
-                  </option>
-                ))}
-              </select>
+                disabledCodes={langs.filter((c) => c !== lang)}
+                onChange={(code) => changeLang(i, code)}
+              />
             )}
             {langs.length > 2 && (
               <button
@@ -166,19 +100,28 @@ export default function TranscriptGrid({ conversation }: { conversation: Convers
           </span>
         )}
         <span className="grid-toolbar-spacer" />
-        <button className="present-btn" title={t("present.open")} onClick={() => openPresent("A")}>
+        {/* Two presentation windows, each shows the whole conversation and picks
+            its own language from a dropdown (§10.7) — the slots aren't tied to a
+            column; the title is just the window's initial caption. */}
+        <button
+          className="present-btn"
+          title={t("present.open")}
+          onClick={() => openPresentWindow("A", languageName(langs[0]))}
+        >
           ⤢ 1
         </button>
-        <button className="present-btn" title={t("present.open")} onClick={() => openPresent("B")}>
+        <button
+          className="present-btn"
+          title={t("present.open")}
+          onClick={() => openPresentWindow("B", languageName(langs[1]))}
+        >
           ⤢ 2
         </button>
       </div>
 
       <div className="transcript-body grid-body" ref={bodyRef}>
         {activeMessages.length === 0 && activePending.length === 0 ? (
-          <div className="placeholder transcript-empty">
-            {recording ? t("view.listening") : t("view.startHint")}
-          </div>
+          <TranscriptEmpty recording={recording} />
         ) : (
           <>
             {activeMessages.map((m) => {
@@ -195,9 +138,16 @@ export default function TranscriptGrid({ conversation }: { conversation: Convers
                     {foreign && (
                       <span className="lang-badge">{languageName(m.detectedLang)}</span>
                     )}
-                    <LangReassign
-                      langs={langs}
-                      current={m.detectedLang}
+                    {/* ⇄: correct which language the utterance was spoken in
+                        (N-language manual fix) — re-translates into the rest. */}
+                    <LangPicker
+                      className="lang-reassign"
+                      triggerClassName="lang-reassign-btn"
+                      label="⇄"
+                      title="Указать язык реплики"
+                      header="Язык реплики"
+                      options={langs.filter((l) => l !== m.detectedLang)}
+                      renderLabel={languageName}
                       onPick={(l) => setMessageLang(m.id, l)}
                     />
                   </div>

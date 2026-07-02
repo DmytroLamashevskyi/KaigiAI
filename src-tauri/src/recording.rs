@@ -72,42 +72,27 @@ struct TranscriptMessage<'a> {
     pending_id: u64,
 }
 
-/// Tauri-managed recording state. Holds the stop handle of the active session,
-/// or `None` when idle.
-#[derive(Default)]
-pub struct Recorder {
-    stop: Mutex<Option<Sender<()>>>,
+/// Session parameters parsed from the settings blob + conversation — extracted
+/// from `Recorder::start` so the parsing is pure and unit-testable. Path
+/// resolution for `saveAudio` stays in `start()` (it needs the `AppHandle`).
+struct SessionConfig {
+    source: AudioSource,
+    device: Option<String>,
+    vad_cfg: VadConfig,
+    detect_foreign: bool,
+    langs: Vec<String>,
+    save_audio: bool,
 }
 
-impl Recorder {
-    pub fn is_recording(&self) -> bool {
-        self.stop.lock().unwrap().is_some()
-    }
-
-    /// Begin a session. `db`/`settings`/`conv` are resolved by the caller (async
-    /// command) and passed in so this stays synchronous.
-    pub fn start(
-        &self,
-        app: AppHandle,
-        db: Db,
-        conv: Conversation,
-        settings: serde_json::Value,
-    ) -> Result<(), String> {
-        let mut guard = self.stop.lock().unwrap();
-        if guard.is_some() {
-            return Err("already recording".into());
-        }
-
-        let lang_a = conv.lang_a.clone();
-        let lang_b = conv.lang_b.clone();
+impl SessionConfig {
+    fn from_settings(settings: &serde_json::Value, conv: &Conversation) -> Self {
         // Conversation languages (§10.7). For a 2-language chat this is just
         // [lang_a, lang_b]; with 3+ it drives N-way translation and the grid UI.
         let langs: Vec<String> = if conv.langs.is_empty() {
-            vec![lang_a.clone(), lang_b.clone()]
+            vec![conv.lang_a.clone(), conv.lang_b.clone()]
         } else {
             conv.langs.clone()
         };
-        let conv_id = conv.id.clone();
         let source = match settings.get("audioSource").and_then(|v| v.as_str()) {
             Some("system") => AudioSource::System,
             _ => AudioSource::Mic,
@@ -122,22 +107,6 @@ impl Recorder {
         } else {
             None
         };
-
-        // When `saveAudio` is on, each utterance's PCM is written as a WAV under
-        // <app_data>/audio and linked to its message via the audio_clip table.
-        let save_audio = settings
-            .get("saveAudio")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let audio_dir = if save_audio {
-            app.path().app_data_dir().ok().map(|d| d.join("audio"))
-        } else {
-            None
-        };
-        if let Some(dir) = &audio_dir {
-            let _ = std::fs::create_dir_all(dir);
-        }
-
         // Silence timing (§10.8). A fixed ~1.5 s grace passes silently (no bar)
         // so mid-sentence pauses don't flicker; then the countdown bar fills over
         // the user's "silence" setting (0.5–3 s) before the utterance finalizes.
@@ -156,15 +125,91 @@ impl Recorder {
             end_frames: reveal_frames + (bar_ms / frame_ms) as usize,
             ..VadConfig::default()
         };
-
         // Language policy (§10.7). When off (default), every utterance is forced
-        // onto one of the two conversation languages — whisper's occasional
-        // misfire (e.g. Russian heard as Turkish) no longer spawns a spurious
-        // "foreign" row. When on, genuine third languages are kept (variant A).
+        // onto one of the conversation languages — whisper's occasional misfire
+        // (e.g. Russian heard as Turkish) no longer spawns a spurious "foreign"
+        // row. When on, genuine third languages are kept (variant A).
         let detect_foreign = settings
             .get("detectForeignLanguages")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        // When `saveAudio` is on, each utterance's PCM is written as a WAV under
+        // <app_data>/audio and linked to its message via the audio_clip table.
+        let save_audio = settings
+            .get("saveAudio")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        Self {
+            source,
+            device,
+            vad_cfg,
+            detect_foreign,
+            langs,
+            save_audio,
+        }
+    }
+}
+
+/// Everything the per-segment pipeline needs, bundled so the segment loop is a
+/// plain function call instead of a 115-line closure body inside `start()`.
+struct PipelineCtx {
+    app: AppHandle,
+    db: Db,
+    conv_id: String,
+    /// Conversation languages — also whisper's decoding hint.
+    langs: Vec<String>,
+    detect_foreign: bool,
+    stt: Box<dyn provider::SttProvider>,
+    translator: Box<dyn provider::TranslationProvider>,
+    audio_dir: Option<std::path::PathBuf>,
+}
+
+/// Tauri-managed recording state. Holds the stop handle of the active session,
+/// or `None` when idle.
+#[derive(Default)]
+pub struct Recorder {
+    stop: Mutex<Option<Sender<()>>>,
+}
+
+impl Recorder {
+    /// Lock the stop-handle, recovering from a poisoned lock instead of
+    /// panicking (mirrors `Sidecars::lock` — a panic during `start()`'s long
+    /// guard-held setup must not brick recording until app restart; the guarded
+    /// `Option<Sender>` has no invariants poisoning protects).
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Sender<()>>> {
+        self.stop.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn is_recording(&self) -> bool {
+        self.lock().is_some()
+    }
+
+    /// Begin a session. `db`/`settings`/`conv` are resolved by the caller (async
+    /// command) and passed in so this stays synchronous.
+    pub fn start(
+        &self,
+        app: AppHandle,
+        db: Db,
+        conv: Conversation,
+        settings: serde_json::Value,
+    ) -> Result<(), String> {
+        let mut guard = self.lock();
+        if guard.is_some() {
+            return Err("already recording".into());
+        }
+
+        let cfg = SessionConfig::from_settings(&settings, &conv);
+        let conv_id = conv.id.clone();
+        // saveAudio's target dir needs the AppHandle, so it resolves here rather
+        // than in the pure SessionConfig parser.
+        let audio_dir = if cfg.save_audio {
+            app.path().app_data_dir().ok().map(|d| d.join("audio"))
+        } else {
+            None
+        };
+        if let Some(dir) = &audio_dir {
+            let _ = std::fs::create_dir_all(dir);
+        }
 
         // Worker -> async processor: one PCM segment per utterance, tagged with
         // its end offset (ms since session start) so transcript rows carry a real
@@ -174,134 +219,25 @@ impl Recorder {
         let (seg_tx, mut seg_rx) = unbounded_channel::<(Vec<f32>, i64, u64, Instant)>();
 
         // STT + translation pipeline runs on the async runtime.
-        let stt = provider::stt_from_settings(&settings);
-        let translator = provider::translation_from_settings(&settings);
+        let ctx = PipelineCtx {
+            app: app.clone(),
+            db,
+            conv_id: conv_id.clone(),
+            langs: cfg.langs.clone(),
+            detect_foreign: cfg.detect_foreign,
+            stt: provider::stt_from_settings(&settings),
+            translator: provider::translation_from_settings(&settings),
+            audio_dir,
+        };
         // Per-session diarizer: labels are stable within this conversation only.
         let mut diarizer = provider::diarizer_from_settings(&settings);
-        // Hand whisper every conversation language as a decoding hint.
-        let hint = langs.clone();
-        let err_app = app.clone();
-        // Cloned for the controller thread before `app`/`conv_id` are moved into
-        // the async pipeline below (the controller emits silence/abort events).
-        let ctl_app = app.clone();
-        let ctl_conv_id = conv_id.clone();
+        // Cloned for the controller thread (it emits silence/abort events itself —
+        // they originate from the VAD on the worker thread, not the async pipeline).
+        let ctl_app = app;
+        let ctl_conv_id = conv_id;
         tauri::async_runtime::spawn(async move {
             while let Some((pcm, end_ms, pending_id, emitted_at)) = seg_rx.recv().await {
-                let dur_ms = (pcm.len() as f64 / SAMPLE_RATE as f64 * 1000.0) as i64;
-                let start_ms = (end_ms - dur_ms).max(0);
-                // The segment finalized: swap the UI's silence-countdown bar for a
-                // processing shimmer while STT + translation run (§10.8).
-                let _ = app.emit(
-                    SEGMENT_PENDING_EVENT,
-                    SegmentPending {
-                        pending_id,
-                        conversation_id: conv_id.clone(),
-                    },
-                );
-                let transcript = match stt.transcribe(&pcm, SAMPLE_RATE, &hint).await {
-                    Ok(t) => t,
-                    Err(e) => {
-                        log::error!("STT failed: {e}");
-                        emit_error(&err_app, format!("Speech recognition failed: {e}"));
-                        let _ = app.emit(SEGMENT_CANCELLED_EVENT, SegmentCancelled { pending_id });
-                        continue;
-                    }
-                };
-                if transcript.text.is_empty() || is_noise(&transcript.text) {
-                    let _ = app.emit(SEGMENT_CANCELLED_EVENT, SegmentCancelled { pending_id });
-                    continue;
-                }
-                let context = recent_context(&db, &conv_id).await;
-                // Helper: translate, logging+toasting on failure (empty on error).
-                let do_translate = |from: String, to: String| {
-                    let translator = &translator;
-                    let text = &transcript.text;
-                    let context = &context;
-                    let err_app = &err_app;
-                    async move {
-                        match translator.translate(text, &from, &to, context).await {
-                            Ok(t) => t,
-                            Err(e) => {
-                                log::error!("translation failed: {e}");
-                                emit_error(err_app, format!("Translation failed: {e}"));
-                                String::new()
-                            }
-                        }
-                    }
-                };
-                // Resolve whisper's detected language against the conversation
-                // languages, snapping obvious misfires by script and (unless
-                // foreign detection is on) forcing the result onto one of them.
-                let detected =
-                    resolve_lang_n(&transcript.lang, &transcript.text, &langs, detect_foreign);
-                // Translate the utterance into every *other* conversation language
-                // (docs/PROJECT.md §10.7). For 2 languages this is a single
-                // translation; with 3+ it fans out, one row per target language
-                // stored in `message_translation`.
-                let mut translations: HashMap<String, String> = HashMap::new();
-                for target in &langs {
-                    if target == &detected {
-                        continue;
-                    }
-                    let t = do_translate(detected.clone(), target.clone()).await;
-                    if !t.is_empty() {
-                        translations.insert(target.clone(), t);
-                    }
-                }
-                // Back-compat scalar fields for the 2-column view / export:
-                //  - pair utterance → `translated_text` = the other language.
-                //  - foreign utterance (outside the pair) → `translated_text` =
-                //    lang_a translation, `translated_text_b` = lang_b translation.
-                //  - 3+ languages → `translated_text` = first other language; the
-                //    grid UI reads `translations` instead.
-                let (translated, translated_b) =
-                    back_compat_translations(&detected, &langs, &translations);
-                let speaker = diarizer.label(&pcm, SAMPLE_RATE);
-                let now = now_ms();
-                // Whole-pipeline latency: from the moment VAD released the
-                // segment to now (STT + translation done, about to persist).
-                let processing_ms = emitted_at.elapsed().as_millis() as i64;
-                let msg = Message {
-                    id: next_id(),
-                    conversation_id: conv_id.clone(),
-                    source: "audio".into(),
-                    detected_lang: detected,
-                    speaker,
-                    original_text: transcript.text,
-                    translated_text: translated,
-                    translated_text_b: translated_b,
-                    start_ms,
-                    end_ms,
-                    created_at: now,
-                    processing_ms: Some(processing_ms),
-                    translations,
-                };
-                if let Err(e) = db.add_message(&msg).await {
-                    log::error!("persist message failed: {e}");
-                }
-                if let Some(dir) = &audio_dir {
-                    let path = dir.join(format!("{}.wav", msg.id));
-                    let wav = crate::audio::encode_wav_pcm16(&pcm, SAMPLE_RATE);
-                    match std::fs::write(&path, wav) {
-                        Ok(()) => {
-                            if let Err(e) = db
-                                .add_audio_clip(&msg.id, &path.to_string_lossy(), dur_ms)
-                                .await
-                            {
-                                log::error!("persist audio clip failed: {e}");
-                            }
-                        }
-                        Err(e) => log::error!("write audio clip failed: {e}"),
-                    }
-                }
-                // Carry `pending_id` alongside the message so the UI replaces the
-                // exact placeholder it raised on `segment-pending` (§10.8).
-                if let Err(e) = app.emit(
-                    "transcript-message",
-                    TranscriptMessage { message: &msg, pending_id },
-                ) {
-                    log::error!("emit failed: {e}");
-                }
+                process_segment(&ctx, &mut diarizer, pcm, end_ms, pending_id, emitted_at).await;
             }
         });
 
@@ -323,9 +259,9 @@ impl Recorder {
             // silent frame and reused by the segment that finalizes it.
             let mut current_silence_id: Option<u64> = None;
             let capture = AudioCapture::start(
-                source,
-                device.as_deref(),
-                vad_cfg,
+                cfg.source,
+                cfg.device.as_deref(),
+                cfg.vad_cfg,
                 move |event| match event {
                     VadEvent::SilenceStarted { hangover_ms } => {
                         next_pending += 1;
@@ -383,28 +319,168 @@ impl Recorder {
     /// Stop the active session (no-op if idle). Dropping the stored sender wakes
     /// the controller thread, which drops the capture and flushes.
     pub fn stop(&self) {
-        let mut guard = self.stop.lock().unwrap();
+        let mut guard = self.lock();
         *guard = None;
+    }
+}
+
+/// One utterance through the pipeline: emit the processing placeholder, STT,
+/// noise filter, language resolution, N-way translation, diarization, persist,
+/// optional WAV clip, and the final `transcript-message` event. Extracted from
+/// `Recorder::start`'s segment loop verbatim (each `continue` became `return`).
+async fn process_segment(
+    ctx: &PipelineCtx,
+    diarizer: &mut Box<dyn provider::diarize::Diarizer>,
+    pcm: Vec<f32>,
+    end_ms: i64,
+    pending_id: u64,
+    emitted_at: Instant,
+) {
+    let dur_ms = (pcm.len() as f64 / SAMPLE_RATE as f64 * 1000.0) as i64;
+    let start_ms = (end_ms - dur_ms).max(0);
+    // The segment finalized: swap the UI's silence-countdown bar for a
+    // processing shimmer while STT + translation run (§10.8).
+    let _ = ctx.app.emit(
+        SEGMENT_PENDING_EVENT,
+        SegmentPending {
+            pending_id,
+            conversation_id: ctx.conv_id.clone(),
+        },
+    );
+    // The conversation languages double as whisper's decoding hint.
+    let transcript = match ctx.stt.transcribe(&pcm, SAMPLE_RATE, &ctx.langs).await {
+        Ok(t) => t,
+        Err(e) => {
+            log::error!("STT failed: {e}");
+            emit_error(&ctx.app, format!("Speech recognition failed: {e}"));
+            let _ = ctx
+                .app
+                .emit(SEGMENT_CANCELLED_EVENT, SegmentCancelled { pending_id });
+            return;
+        }
+    };
+    if transcript.text.is_empty() || is_noise(&transcript.text) {
+        let _ = ctx
+            .app
+            .emit(SEGMENT_CANCELLED_EVENT, SegmentCancelled { pending_id });
+        return;
+    }
+    let context = recent_context(&ctx.db, &ctx.conv_id).await;
+    // Helper: translate, logging+toasting on failure (empty on error).
+    let do_translate = |from: String, to: String| {
+        let translator = &ctx.translator;
+        let text = &transcript.text;
+        let context = &context;
+        let err_app = &ctx.app;
+        async move {
+            match translator.translate(text, &from, &to, context).await {
+                Ok(t) => t,
+                Err(e) => {
+                    log::error!("translation failed: {e}");
+                    emit_error(err_app, format!("Translation failed: {e}"));
+                    String::new()
+                }
+            }
+        }
+    };
+    // Resolve whisper's detected language against the conversation
+    // languages, snapping obvious misfires by script and (unless
+    // foreign detection is on) forcing the result onto one of them.
+    let detected = resolve_lang_n(
+        &transcript.lang,
+        &transcript.text,
+        &ctx.langs,
+        ctx.detect_foreign,
+    );
+    // Translate the utterance into every *other* conversation language
+    // (docs/PROJECT.md §10.7). For 2 languages this is a single
+    // translation; with 3+ it fans out, one row per target language
+    // stored in `message_translation`.
+    let mut translations: HashMap<String, String> = HashMap::new();
+    for target in &ctx.langs {
+        if target == &detected {
+            continue;
+        }
+        let t = do_translate(detected.clone(), target.clone()).await;
+        if !t.is_empty() {
+            translations.insert(target.clone(), t);
+        }
+    }
+    // Back-compat scalar fields for the 2-column view / export:
+    //  - pair utterance → `translated_text` = the other language.
+    //  - foreign utterance (outside the pair) → `translated_text` =
+    //    lang_a translation, `translated_text_b` = lang_b translation.
+    //  - 3+ languages → `translated_text` = first other language; the
+    //    grid UI reads `translations` instead.
+    let (translated, translated_b) = back_compat_translations(&detected, &ctx.langs, &translations);
+    let speaker = diarizer.label(&pcm, SAMPLE_RATE);
+    let now = now_ms();
+    // Whole-pipeline latency: from the moment VAD released the
+    // segment to now (STT + translation done, about to persist).
+    let processing_ms = emitted_at.elapsed().as_millis() as i64;
+    let msg = Message {
+        id: next_id(),
+        conversation_id: ctx.conv_id.clone(),
+        source: "audio".into(),
+        detected_lang: detected,
+        speaker,
+        original_text: transcript.text,
+        translated_text: translated,
+        translated_text_b: translated_b,
+        start_ms,
+        end_ms,
+        created_at: now,
+        processing_ms: Some(processing_ms),
+        translations,
+    };
+    if let Err(e) = ctx.db.add_message(&msg).await {
+        log::error!("persist message failed: {e}");
+    }
+    if let Some(dir) = &ctx.audio_dir {
+        let path = dir.join(format!("{}.wav", msg.id));
+        let wav = crate::audio::encode_wav_pcm16(&pcm, SAMPLE_RATE);
+        match std::fs::write(&path, wav) {
+            Ok(()) => {
+                if let Err(e) = ctx
+                    .db
+                    .add_audio_clip(&msg.id, &path.to_string_lossy(), dur_ms)
+                    .await
+                {
+                    log::error!("persist audio clip failed: {e}");
+                }
+            }
+            Err(e) => log::error!("write audio clip failed: {e}"),
+        }
+    }
+    // Carry `pending_id` alongside the message so the UI replaces the
+    // exact placeholder it raised on `segment-pending` (§10.8).
+    if let Err(e) = ctx.app.emit(
+        "transcript-message",
+        TranscriptMessage {
+            message: &msg,
+            pending_id,
+        },
+    ) {
+        log::error!("emit failed: {e}");
     }
 }
 
 /// Recent conversation text (last few turns) handed to the translator so it can
 /// keep terminology, names and pronouns consistent across utterances. Empty on
-/// any DB error or for a fresh conversation.
+/// any DB error or for a fresh conversation. Runs once per finalized segment, so
+/// it uses the LIMIT-ed query instead of scanning the whole conversation.
 async fn recent_context(db: &Db, conv_id: &str) -> String {
-    const MAX_TURNS: usize = 6;
-    let msgs = match db.list_messages(conv_id).await {
-        Ok(m) => m,
+    const MAX_TURNS: i64 = 6;
+    let rows = match db.recent_message_texts(conv_id, MAX_TURNS).await {
+        Ok(r) => r,
         Err(_) => return String::new(),
     };
-    let start = msgs.len().saturating_sub(MAX_TURNS);
-    msgs[start..]
-        .iter()
-        .map(|m| {
-            if m.translated_text.is_empty() {
-                m.original_text.clone()
+    rows.iter()
+        .map(|(original, translated)| {
+            if translated.is_empty() {
+                original.clone()
             } else {
-                format!("{} | {}", m.original_text, m.translated_text)
+                format!("{original} | {translated}")
             }
         })
         .collect::<Vec<_>>()
@@ -719,5 +795,47 @@ mod tests {
         assert_eq!(resolve_lang("fr", "bonjour le monde", "ru", "ja", true), "fr");
         // …but Cyrillic text wrongly tagged "tr" is still corrected to ru.
         assert_eq!(resolve_lang("tr", "это русский", "ru", "ja", true), "ru");
+    }
+
+    fn test_conv(langs: Vec<String>) -> Conversation {
+        Conversation {
+            id: "c".into(),
+            title: "t".into(),
+            lang_a: "ru".into(),
+            lang_b: "en".into(),
+            langs,
+            speaker_names: None,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn session_config_defaults_and_lang_fallback() {
+        let cfg = SessionConfig::from_settings(&serde_json::json!({}), &test_conv(vec![]));
+        // Empty langs falls back to the [lang_a, lang_b] pair.
+        assert_eq!(cfg.langs, vec!["ru", "en"]);
+        assert!(!cfg.detect_foreign); // off by default (§10.7)
+        assert!(!cfg.save_audio);
+        assert_eq!(cfg.source, AudioSource::Mic);
+        assert_eq!(cfg.device, None);
+    }
+
+    #[test]
+    fn session_config_clamps_silence_ms() {
+        let frame_ms = crate::audio::vad::FRAME_MS as u64;
+        let grace_frames = (1500 / frame_ms) as usize;
+        // Below the floor → clamped to 500 ms of bar time.
+        let lo = SessionConfig::from_settings(
+            &serde_json::json!({ "silenceMs": 100 }),
+            &test_conv(vec![]),
+        );
+        assert_eq!(lo.vad_cfg.end_frames, grace_frames + (500 / frame_ms) as usize);
+        // Above the ceiling → clamped to 3000 ms.
+        let hi = SessionConfig::from_settings(
+            &serde_json::json!({ "silenceMs": 60000 }),
+            &test_conv(vec![]),
+        );
+        assert_eq!(hi.vad_cfg.end_frames, grace_frames + (3000 / frame_ms) as usize);
     }
 }

@@ -38,42 +38,49 @@ function MainArea() {
   );
 }
 
-function ErrorToast() {
-  const { error, dismissError } = useApp();
+/** Auto-dismissing toast shared by the error and notice variants (same markup
+ *  and timer, different palette/icon/role/duration). */
+const TOAST_VARIANTS = {
+  error: { cls: "toast-error", icon: "⚠", role: "alert", ms: 8000 },
+  notice: { cls: "toast-notice", icon: "✓", role: "status", ms: 6000 },
+} as const;
+
+function Toast({
+  variant,
+  message,
+  onDismiss,
+}: {
+  variant: keyof typeof TOAST_VARIANTS;
+  message: string | null;
+  onDismiss: () => void;
+}) {
+  const { cls, icon, role, ms } = TOAST_VARIANTS[variant];
   useEffect(() => {
-    if (!error) return;
-    const id = setTimeout(dismissError, 8000);
+    if (!message) return;
+    const id = setTimeout(onDismiss, ms);
     return () => clearTimeout(id);
-  }, [error, dismissError]);
-  if (!error) return null;
+  }, [message, onDismiss, ms]);
+  if (!message) return null;
   return (
-    <div className="toast toast-error" role="alert">
-      <span className="toast-icon">⚠</span>
-      <span className="toast-msg">{error}</span>
-      <button className="toast-close" onClick={dismissError} aria-label="Dismiss">
+    <div className={`toast ${cls}`} role={role}>
+      <span className="toast-icon">{icon}</span>
+      <span className="toast-msg">{message}</span>
+      <button className="toast-close" onClick={onDismiss} aria-label="Dismiss">
         ✕
       </button>
     </div>
   );
 }
 
+// Thin wrappers so App itself never calls useApp() (it renders AppProvider).
+function ErrorToast() {
+  const { error, dismissError } = useApp();
+  return <Toast variant="error" message={error} onDismiss={dismissError} />;
+}
+
 function NoticeToast() {
   const { notice, dismissNotice } = useApp();
-  useEffect(() => {
-    if (!notice) return;
-    const id = setTimeout(dismissNotice, 6000);
-    return () => clearTimeout(id);
-  }, [notice, dismissNotice]);
-  if (!notice) return null;
-  return (
-    <div className="toast toast-notice" role="status">
-      <span className="toast-icon">✓</span>
-      <span className="toast-msg">{notice}</span>
-      <button className="toast-close" onClick={dismissNotice} aria-label="Dismiss">
-        ✕
-      </button>
-    </div>
-  );
+  return <Toast variant="notice" message={notice} onDismiss={dismissNotice} />;
 }
 
 export default function App() {

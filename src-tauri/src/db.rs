@@ -141,6 +141,16 @@ CREATE TABLE IF NOT EXISTS setting (
 );
 "#;
 
+/// Conversation SELECT column list — the single source of truth shared by every
+/// conversation query, so adding a column can't silently miss one site (a
+/// mismatch with [`row_to_conversation`] would be a runtime `Row::get` panic).
+const CONV_COLS: &str =
+    "id, title, lang_a, lang_b, langs, speaker_names, created_at, updated_at";
+
+/// Message SELECT column list — see [`CONV_COLS`] for why this is shared.
+const MSG_COLS: &str = "id, conversation_id, source, detected_lang, speaker, \
+     original_text, translated_text, translated_text_b, start_ms, end_ms, created_at, processing_ms";
+
 /// Build a [`Conversation`] from a row, parsing the `langs` JSON column (falling
 /// back to `[lang_a, lang_b]` for older rows that predate multi-language).
 fn row_to_conversation(row: &sqlx::sqlite::SqliteRow) -> Conversation {
@@ -265,66 +275,87 @@ impl Db {
     }
 
     pub async fn list_conversations(&self) -> Result<Vec<Conversation>, sqlx::Error> {
-        let rows = sqlx::query(
-            "SELECT id, title, lang_a, lang_b, langs, speaker_names, created_at, updated_at \
-             FROM conversation ORDER BY updated_at DESC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let sql = format!("SELECT {CONV_COLS} FROM conversation ORDER BY updated_at DESC");
+        let rows = sqlx::query(&sql).fetch_all(&self.pool).await?;
         Ok(rows.iter().map(row_to_conversation).collect())
     }
 
     pub async fn get_conversation(&self, id: &str) -> Result<Option<Conversation>, sqlx::Error> {
-        let row = sqlx::query(
-            "SELECT id, title, lang_a, lang_b, langs, speaker_names, created_at, updated_at \
-             FROM conversation WHERE id = ?",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let sql = format!("SELECT {CONV_COLS} FROM conversation WHERE id = ?");
+        let row = sqlx::query(&sql)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(row.as_ref().map(row_to_conversation))
     }
 
-    pub async fn list_messages(&self, conversation_id: &str) -> Result<Vec<Message>, sqlx::Error> {
-        let mut messages: Vec<Message> = sqlx::query(
-            "SELECT id, conversation_id, source, detected_lang, speaker, \
-             original_text, translated_text, translated_text_b, start_ms, end_ms, created_at, processing_ms \
-             FROM message WHERE conversation_id = ? ORDER BY created_at ASC",
-        )
-        .bind(conversation_id)
-        .fetch_all(&self.pool)
-        .await?
-        .iter()
-        .map(row_to_message)
-        .collect();
-        let rows: Vec<(String, String, String)> = sqlx::query_as(
-            "SELECT mt.message_id, mt.lang, mt.text FROM message_translation mt \
-             JOIN message m ON m.id = mt.message_id WHERE m.conversation_id = ?",
-        )
-        .bind(conversation_id)
-        .fetch_all(&self.pool)
-        .await?;
+    /// Fetch messages (one conversation or all) and hydrate each one's
+    /// per-language `translations` map from `message_translation`.
+    async fn fetch_messages(
+        &self,
+        conversation_id: Option<&str>,
+    ) -> Result<Vec<Message>, sqlx::Error> {
+        let (msg_sql, tr_sql) = match conversation_id {
+            Some(_) => (
+                format!(
+                    "SELECT {MSG_COLS} FROM message WHERE conversation_id = ? ORDER BY created_at ASC"
+                ),
+                "SELECT mt.message_id, mt.lang, mt.text FROM message_translation mt \
+                 JOIN message m ON m.id = mt.message_id WHERE m.conversation_id = ?"
+                    .to_string(),
+            ),
+            None => (
+                format!("SELECT {MSG_COLS} FROM message ORDER BY created_at ASC"),
+                "SELECT message_id, lang, text FROM message_translation".to_string(),
+            ),
+        };
+        let mut msg_query = sqlx::query(&msg_sql);
+        let mut tr_query = sqlx::query_as::<_, (String, String, String)>(&tr_sql);
+        if let Some(id) = conversation_id {
+            msg_query = msg_query.bind(id);
+            tr_query = tr_query.bind(id);
+        }
+        let mut messages: Vec<Message> = msg_query
+            .fetch_all(&self.pool)
+            .await?
+            .iter()
+            .map(row_to_message)
+            .collect();
+        let rows = tr_query.fetch_all(&self.pool).await?;
         attach_translations(&mut messages, rows);
         Ok(messages)
     }
 
+    pub async fn list_messages(&self, conversation_id: &str) -> Result<Vec<Message>, sqlx::Error> {
+        self.fetch_messages(Some(conversation_id)).await
+    }
+
     async fn list_all_messages(&self) -> Result<Vec<Message>, sqlx::Error> {
-        let mut messages: Vec<Message> = sqlx::query(
-            "SELECT id, conversation_id, source, detected_lang, speaker, \
-             original_text, translated_text, translated_text_b, start_ms, end_ms, created_at, processing_ms \
-             FROM message ORDER BY created_at ASC",
+        self.fetch_messages(None).await
+    }
+
+    /// The last `limit` (original_text, translated_text) pairs of a conversation
+    /// in chronological order. Purpose-built for the translator's rolling context
+    /// (recording.rs::recent_context), which runs per utterance — unlike
+    /// [`Self::list_messages`] it doesn't scan the whole conversation or touch
+    /// `message_translation`.
+    pub async fn recent_message_texts(
+        &self,
+        conversation_id: &str,
+        limit: i64,
+    ) -> Result<Vec<(String, String)>, sqlx::Error> {
+        let mut rows: Vec<(String, String)> = sqlx::query_as(
+            // rowid DESC tie-break: same-millisecond rows come back in exact
+            // reverse insert order, so the reverse() below restores it.
+            "SELECT original_text, translated_text FROM message \
+             WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
         )
+        .bind(conversation_id)
+        .bind(limit)
         .fetch_all(&self.pool)
-        .await?
-        .iter()
-        .map(row_to_message)
-        .collect();
-        let rows: Vec<(String, String, String)> =
-            sqlx::query_as("SELECT message_id, lang, text FROM message_translation")
-                .fetch_all(&self.pool)
-                .await?;
-        attach_translations(&mut messages, rows);
-        Ok(messages)
+        .await?;
+        rows.reverse();
+        Ok(rows)
     }
 
     pub async fn create_conversation(&self, c: &Conversation) -> Result<(), sqlx::Error> {
@@ -415,15 +446,6 @@ impl Db {
         Ok(())
     }
 
-    pub async fn touch_conversation(&self, id: &str, updated_at: i64) -> Result<(), sqlx::Error> {
-        sqlx::query("UPDATE conversation SET updated_at = ? WHERE id = ?")
-            .bind(updated_at)
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
     pub async fn delete_conversation(&self, id: &str) -> Result<(), sqlx::Error> {
         // ON DELETE CASCADE (foreign_keys=ON) removes messages/summary/notes.
         sqlx::query("DELETE FROM conversation WHERE id = ?")
@@ -434,6 +456,11 @@ impl Db {
     }
 
     pub async fn add_message(&self, m: &Message) -> Result<(), sqlx::Error> {
+        // One transaction for the whole upsert: the message row, the destructive
+        // DELETE+reINSERT of its per-language translations, and the conversation
+        // timestamp land atomically, so a concurrent writer or crash can never
+        // observe a message with partially-replaced translations.
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO message (id, conversation_id, source, detected_lang, speaker, \
              original_text, translated_text, translated_text_b, start_ms, end_ms, created_at, processing_ms) \
@@ -457,13 +484,13 @@ impl Db {
         .bind(m.end_ms)
         .bind(m.created_at)
         .bind(m.processing_ms)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
-        // Replace the per-language translations (§10.7). Cheap: a message has at
-        // most a few langs. Empty map (2-language path) leaves nothing here.
+        // Replace the per-language translations (§10.7). A message has at most a
+        // few langs; the empty map (2-language path) leaves nothing here.
         sqlx::query("DELETE FROM message_translation WHERE message_id = ?")
             .bind(&m.id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
         for (lang, text) in &m.translations {
             sqlx::query(
@@ -472,10 +499,15 @@ impl Db {
             .bind(&m.id)
             .bind(lang)
             .bind(text)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
         }
-        self.touch_conversation(&m.conversation_id, m.created_at).await?;
+        sqlx::query("UPDATE conversation SET updated_at = ? WHERE id = ?")
+            .bind(m.created_at)
+            .bind(&m.conversation_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 

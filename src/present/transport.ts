@@ -1,4 +1,5 @@
 import { emit, listen } from "@tauri-apps/api/event";
+import { hasTauri } from "../env";
 import { PRESENT_CHANNEL, type PresentState } from "./channel";
 
 // Cross-window transport for the presentation window. In the desktop app the
@@ -10,10 +11,6 @@ import { PRESENT_CHANNEL, type PresentState } from "./channel";
 
 const STATE_EVENT = "present-state";
 const HELLO_EVENT = "present-hello";
-
-function hasTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
 
 function tauriEmit(event: string, payload?: unknown): void {
   emit(event, payload ?? {}).catch((e) => console.error("present emit failed", e));

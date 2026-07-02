@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Conversation, Message, Settings, SetupIssue } from "../types";
 import { MOCK_CONVERSATIONS, MOCK_MESSAGES } from "../data/mock";
+import { hasTauri } from "../env";
 
 /** A finished transcript message carries the `pendingId` of the placeholder it
  *  resolves (§10.8); undefined for paths that never raised one. */
@@ -203,6 +204,26 @@ function localBackend(): Backend {
     writeLocal(s);
     return Promise.resolve();
   };
+  // Find-patch-touch one conversation by id (shared by the rename/langs/speaker
+  // mutators, which differ only in the fields they set).
+  const mutateConv = (
+    id: string,
+    updatedAt: number,
+    fn: (c: Conversation) => void
+  ) =>
+    mutate((s) => {
+      const c = s.conversations.find((x) => x.id === id);
+      if (c) {
+        fn(c);
+        c.updatedAt = updatedAt;
+      }
+    });
+  const setLanguages = (id: string, langs: string[], updatedAt: number) =>
+    mutateConv(id, updatedAt, (c) => {
+      c.langs = langs;
+      c.langA = langs[0] ?? c.langA;
+      c.langB = langs[1] ?? c.langB;
+    });
   return {
     bootstrap: () => Promise.resolve(readLocal()),
     createConversation: (c) =>
@@ -211,40 +232,17 @@ function localBackend(): Backend {
         s.messages[c.id] = [];
       }),
     renameConversation: (id, title, updatedAt) =>
-      mutate((s) => {
-        const c = s.conversations.find((x) => x.id === id);
-        if (c) {
-          c.title = title;
-          c.updatedAt = updatedAt;
-        }
+      mutateConv(id, updatedAt, (c) => {
+        c.title = title;
       }),
+    // Same semantics as setLanguages with a 2-element list (mirrors the DB,
+    // which also keeps `langs` in lockstep with lang_a/lang_b).
     setConversationLangs: (id, langA, langB, updatedAt) =>
-      mutate((s) => {
-        const c = s.conversations.find((x) => x.id === id);
-        if (c) {
-          c.langA = langA;
-          c.langB = langB;
-          c.langs = [langA, langB];
-          c.updatedAt = updatedAt;
-        }
-      }),
-    setLanguages: (id, langs, updatedAt) =>
-      mutate((s) => {
-        const c = s.conversations.find((x) => x.id === id);
-        if (c) {
-          c.langs = langs;
-          c.langA = langs[0] ?? c.langA;
-          c.langB = langs[1] ?? c.langB;
-          c.updatedAt = updatedAt;
-        }
-      }),
+      setLanguages(id, [langA, langB], updatedAt),
+    setLanguages,
     setSpeakerNames: (id, namesJson, updatedAt) =>
-      mutate((s) => {
-        const c = s.conversations.find((x) => x.id === id);
-        if (c) {
-          c.speakerNames = namesJson;
-          c.updatedAt = updatedAt;
-        }
+      mutateConv(id, updatedAt, (c) => {
+        c.speakerNames = namesJson;
       }),
     setMessageSpeaker: (messageId, label) =>
       mutate((s) => {
@@ -399,10 +397,6 @@ function browserSummarize(
 }
 
 // --- Selection ---------------------------------------------------------------
-
-function hasTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
 
 let cached: Backend | null = null;
 

@@ -1,24 +1,17 @@
-import { useEffect, useRef } from "react";
 import { useApp, MAX_LANGS } from "../state/AppState";
-import { getBackend } from "../backend";
-import { logErr } from "../state/helpers";
+import { openPresentWindow } from "../state/helpers";
 import { conversationLangs } from "../types";
 import { languageName, LANGUAGES } from "../data/languages";
 import { FONT_SCALE } from "../data/fontSize";
+import { useAutoScroll } from "../hooks/useAutoScroll";
 import { useT } from "../i18n/useT";
 import LanguageBar from "./LanguageBar";
 import TranscriptRow from "./TranscriptRow";
 import TranscriptGrid from "./TranscriptGrid";
-import PendingRow from "./PendingRow";
+import PendingRow, { TranscriptEmpty } from "./PendingRow";
 import LangPicker from "./LangPicker";
+import LangCodeSelect from "./LangCodeSelect";
 import InputBar from "./InputBar";
-
-function openPresent(side: "A" | "B", title: string) {
-  // Routes through the backend: a native Tauri window in the desktop app, or
-  // window.open in the browser (window.open doesn't work in the Tauri webview).
-  // `title` is the language name for the window caption.
-  getBackend().openPresent(side, title).catch(logErr("openPresent failed"));
-}
 
 export default function TranscriptView() {
   const {
@@ -33,11 +26,10 @@ export default function TranscriptView() {
     setLanguages,
   } = useApp();
   const t = useT();
-  const bodyRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight });
-  }, [activeMessages.length, activePending.length]);
+  const bodyRef = useAutoScroll<HTMLDivElement>([
+    activeMessages.length,
+    activePending.length,
+  ]);
 
   if (!activeConversation) {
     return <div className="placeholder">{t("view.pickOrCreate")}</div>;
@@ -76,22 +68,17 @@ export default function TranscriptView() {
           {locked ? (
             <span className="col-head lang-a-text">{languageName(langA)}</span>
           ) : (
-            <select
+            <LangCodeSelect
               className="lang-select lang-a"
               value={langA}
-              onChange={(e) => setConversationLangs(e.target.value, langB)}
-            >
-              {LANGUAGES.map((l) => (
-                <option key={l.code} value={l.code} disabled={l.code === langB}>
-                  {l.nativeName}
-                </option>
-              ))}
-            </select>
+              disabledCodes={[langB]}
+              onChange={(code) => setConversationLangs(code, langB)}
+            />
           )}
           <button
             className="present-btn"
             title={t("present.open")}
-            onClick={() => openPresent("A", languageName(langA))}
+            onClick={() => openPresentWindow("A", languageName(langA))}
           >
             ⤢
           </button>
@@ -105,7 +92,12 @@ export default function TranscriptView() {
           )}
           {langs.length < MAX_LANGS && (
             <LangPicker
-              exclude={langs}
+              options={LANGUAGES.filter((l) => !langs.includes(l.code)).map(
+                (l) => l.code
+              )}
+              renderLabel={(code) =>
+                LANGUAGES.find((l) => l.code === code)?.nativeName ?? code
+              }
               onPick={(code) => setLanguages([...langs, code])}
             />
           )}
@@ -115,33 +107,26 @@ export default function TranscriptView() {
           <button
             className="present-btn"
             title={t("present.open")}
-            onClick={() => openPresent("B", languageName(langB))}
+            onClick={() => openPresentWindow("B", languageName(langB))}
           >
             ⤢
           </button>
           {locked ? (
             <span className="col-head lang-b-text">{languageName(langB)}</span>
           ) : (
-            <select
+            <LangCodeSelect
               className="lang-select lang-b"
               value={langB}
-              onChange={(e) => setConversationLangs(langA, e.target.value)}
-            >
-              {LANGUAGES.map((l) => (
-                <option key={l.code} value={l.code} disabled={l.code === langA}>
-                  {l.nativeName}
-                </option>
-              ))}
-            </select>
+              disabledCodes={[langA]}
+              onChange={(code) => setConversationLangs(langA, code)}
+            />
           )}
         </div>
       </div>
 
       <div className="transcript-body" ref={bodyRef}>
         {activeMessages.length === 0 && activePending.length === 0 ? (
-          <div className="placeholder transcript-empty">
-            {recording ? t("view.listening") : t("view.startHint")}
-          </div>
+          <TranscriptEmpty recording={recording} />
         ) : (
           <>
             {activeMessages.map((m) => (

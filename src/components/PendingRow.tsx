@@ -1,5 +1,16 @@
 import { type CSSProperties } from "react";
 import type { PendingSegment } from "../types";
+import { useT } from "../i18n/useT";
+
+/** Empty-transcript placeholder shared by the 2-pane view and the N-lang grid. */
+export function TranscriptEmpty({ recording }: { recording: boolean }) {
+  const t = useT();
+  return (
+    <div className="placeholder transcript-empty">
+      {recording ? t("view.listening") : t("view.startHint")}
+    </div>
+  );
+}
 
 /** Full-width placeholder bar shown while an utterance settles (§10.8). In the
  *  `silence` phase a fill sweeps across the chat width over `hangoverMs` — the

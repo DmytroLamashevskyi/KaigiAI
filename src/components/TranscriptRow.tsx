@@ -87,7 +87,9 @@ export function SpeakerBadge({
     );
   }
 
-  const labels = speakerLabels(activeMessages);
+  // Only needed while the reassign menu is open — skip the O(messages) scan on
+  // ordinary renders (a badge renders per row, on every transcript event).
+  const labels = menuOpen ? speakerLabels(activeMessages) : [];
   const others = labels.filter((l) => l !== label);
 
   const reassign = (target: string) => {

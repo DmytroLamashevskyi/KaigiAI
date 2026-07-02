@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useApp } from "../state/AppState";
 import { useT } from "../i18n/useT";
+import Modal from "./Modal";
 
 export default function SummaryModal() {
   const { summaryOpen, closeSummary, summarize } = useApp();
@@ -45,32 +46,24 @@ export default function SummaryModal() {
   };
 
   return (
-    <div className="modal-backdrop" onClick={closeSummary}>
-      <div className="modal summary-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <h2>{t("summary.title")}</h2>
-          <button className="close-btn" onClick={closeSummary} aria-label="Close">
-            ✕
-          </button>
-        </div>
-        <div className="modal-body">
-          {loading ? (
-            <p className="summary-status">{t("summary.loading")}</p>
-          ) : failed ? (
-            <p className="summary-status summary-failed">{t("summary.failed")}</p>
-          ) : (
-            <div className="summary-content">{content}</div>
-          )}
-        </div>
-        {!loading && !failed && content && (
-          <div className="modal-footer">
-            <button className="summary-copy" onClick={copy}>
-              {copied ? "✓ " : ""}
-              {t("summary.copy")}
-            </button>
-          </div>
+    <Modal title={t("summary.title")} className="summary-modal" onClose={closeSummary}>
+      <div className="modal-body">
+        {loading ? (
+          <p className="summary-status">{t("summary.loading")}</p>
+        ) : failed ? (
+          <p className="summary-status summary-failed">{t("summary.failed")}</p>
+        ) : (
+          <div className="summary-content">{content}</div>
         )}
       </div>
-    </div>
+      {!loading && !failed && content && (
+        <div className="modal-footer">
+          <button className="summary-copy" onClick={copy}>
+            {copied ? "✓ " : ""}
+            {t("summary.copy")}
+          </button>
+        </div>
+      )}
+    </Modal>
   );
 }

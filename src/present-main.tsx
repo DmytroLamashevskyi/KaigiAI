@@ -1,6 +1,12 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import PresentView from "./components/PresentView";
+import { hasTauri } from "./env";
+// Order mirrors the main entry (main.tsx -> global.css, App.tsx -> app.css):
+// global.css defines the design tokens (:root variables) and the
+// [data-theme="dark"] overrides that app.css's rules — and this window's own
+// theme toggle — depend on. Without it every var() here is unresolved.
+import "./styles/global.css";
 import "./styles/app.css";
 
 // Dedicated, lightweight entry for the presentation window (a separate page so
@@ -10,7 +16,7 @@ import "./styles/app.css";
 function resolveSide(): "A" | "B" {
   const q = new URLSearchParams(location.search).get("side");
   if (q === "A" || q === "B") return q;
-  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+  if (hasTauri()) {
     const label = (
       window as unknown as {
         __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } };

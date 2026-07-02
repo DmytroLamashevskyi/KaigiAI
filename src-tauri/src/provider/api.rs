@@ -210,7 +210,7 @@ impl SttProvider for ApiProvider {
         let lang = parsed
             .language
             .as_deref()
-            .map(|l| normalize_lang(l, hint_langs))
+            .map(normalize_lang)
             .unwrap_or(fallback);
         Ok(Transcript {
             text: parsed.text.trim().to_string(),
@@ -233,8 +233,10 @@ fn short_detail(body: String) -> String {
 }
 
 /// Whisper APIs may return the language as a full word ("english") or an ISO
-/// code ("en"). Map the common cases; otherwise fall back to a hinted lang.
-fn normalize_lang(raw: &str, hint_langs: &[String]) -> String {
+/// code ("en"). Map the common spellings to ISO codes; anything else passes
+/// through unchanged — `resolve_lang_n` in recording.rs does the real snapping
+/// onto the conversation languages downstream.
+fn normalize_lang(raw: &str) -> String {
     let l = raw.trim().to_lowercase();
     let code = match l.as_str() {
         "en" | "english" => "en",
@@ -253,13 +255,5 @@ fn normalize_lang(raw: &str, hint_langs: &[String]) -> String {
         "ar" | "arabic" => "ar",
         other => other,
     };
-    if hint_langs.iter().any(|h| h == code) {
-        return code.to_string();
-    }
-    // Unknown/unhinted: prefer a hinted language to keep A/B routing sane.
-    hint_langs
-        .iter()
-        .find(|h| h.as_str() == code)
-        .cloned()
-        .unwrap_or_else(|| code.to_string())
+    code.to_string()
 }

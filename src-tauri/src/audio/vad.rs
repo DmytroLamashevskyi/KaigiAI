@@ -129,7 +129,8 @@ impl Vad {
     }
 
     /// Finalize any in-progress segment. Call when capture stops so a final
-    /// utterance that never saw trailing silence is not lost. Mirrors
+    /// utterance that never saw trailing silence is not lost. Folds the
+    /// sub-frame tail into the segment, then delegates to
     /// [`Self::close_segment`]: emits the [`VadEvent::Segment`] if long enough, or
     /// a [`VadEvent::PendingAborted`] if a countdown bar was showing but the
     /// segment is discarded — so the UI placeholder is never left orphaned.
@@ -144,19 +145,7 @@ impl Vad {
             }
         }
         if let State::Speech = self.state {
-            self.state = State::Silence;
-            // Drop the trailing hangover silence (see close_segment).
-            let trim = self.silence_run.saturating_mul(FRAME_SAMPLES);
-            let keep = self.segment.len().saturating_sub(trim);
-            self.segment.truncate(keep);
-            let announced = self.pause_announced;
-            let seg = std::mem::take(&mut self.segment);
-            self.reset_runs();
-            if seg.len() >= self.cfg.min_segment_samples {
-                out.push(VadEvent::Segment(seg));
-            } else if announced {
-                out.push(VadEvent::PendingAborted);
-            }
+            self.close_segment(&mut out);
         }
         out
     }

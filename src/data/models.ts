@@ -1,27 +1,3 @@
-// Catalog for the local model manager (download-at-first-run, per design 10.1).
-// VRAM tiers and provider recommendations mirror docs/PROJECT.md.
-
-export interface ModelInfo {
-  id: string;
-  label: string;
-  sizeGb: number;
-  tier: "low" | "mid" | "high";
-  license: string;
-}
-
-export const STT_MODELS: ModelInfo[] = [
-  { id: "whisper-small", label: "Whisper small", sizeGb: 1.2, tier: "low", license: "MIT" },
-  { id: "whisper-medium", label: "Whisper medium", sizeGb: 3, tier: "mid", license: "MIT" },
-  { id: "whisper-large-v3", label: "Whisper large-v3", sizeGb: 5, tier: "high", license: "MIT" },
-];
-
-export const LLM_MODELS: ModelInfo[] = [
-  { id: "qwen2.5-3b-instruct", label: "Qwen2.5 3B Instruct", sizeGb: 2.5, tier: "low", license: "Qwen" },
-  { id: "qwen2.5-7b-instruct", label: "Qwen2.5 7B Instruct", sizeGb: 5, tier: "mid", license: "Apache-2.0" },
-  { id: "qwen2.5-14b-instruct", label: "Qwen2.5 14B Instruct", sizeGb: 9, tier: "high", license: "Apache-2.0" },
-  { id: "gemma-2-9b-it", label: "Gemma 2 9B IT", sizeGb: 6, tier: "high", license: "Gemma" },
-];
-
 // Where to download the on-device servers and models for local mode. Shown as
 // helper links next to the path fields in Settings so users can install
 // everything without leaving the app. (Links open externally.)

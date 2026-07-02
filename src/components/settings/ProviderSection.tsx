@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useApp } from "../../state/AppState";
-import { API_PROVIDERS, LOCAL_DOWNLOADS } from "../../data/models";
+import { LOCAL_DOWNLOADS } from "../../data/models";
 import { useT } from "../../i18n/useT";
-import { DownloadHint, Field, Section, openExternal } from "./common";
+import { ApiPresets, deriveProviderModes, DownloadHint, Field, Section } from "./common";
 
 const SCENARIOS: {
   id: string;
@@ -41,12 +41,12 @@ export default function ProviderSection() {
   // the two raw toggles (confusing), we present three named scenarios; the raw
   // modes are derived from the picked card. The technical server paths live
   // under an "Advanced" disclosure that auto-opens when a needed path is blank.
-  const sttLocal = settings.sttMode === "local";
-  const translationLocal = settings.translationMode === "local";
-  const anyLocal = sttLocal || translationLocal;
-  const anyApi = !sttLocal || !translationLocal;
+  const { sttLocal, translationLocal, anyLocal, anyApi } =
+    deriveProviderModes(settings);
   // The active scenario, derived from the two modes (the 4th combo — cloud
-  // speech + local translation — is uncommon and simply highlights nothing).
+  // speech + local translation — is uncommon and simply highlights nothing;
+  // NB the wizard's shorter expression highlights "cloud" for that combo — a
+  // known divergence, kept as-is).
   const scenario =
     sttLocal && translationLocal
       ? "local"
@@ -186,29 +186,7 @@ export default function ProviderSection() {
         <>
           <div className="api-help">
             <p className="api-help-title">{t("settings.apiQuickSetup")}</p>
-            <div className="api-presets">
-              {API_PROVIDERS.map((p) => (
-                <div key={p.id} className="api-preset">
-                  <button
-                    type="button"
-                    className="api-preset-select"
-                    onClick={() => updateSettings({ apiBaseUrl: p.baseUrl })}
-                  >
-                    <span className="api-preset-name">{p.name}</span>
-                    <span className="api-preset-note">{p.note}</span>
-                  </button>
-                  {p.keyUrl && (
-                    <button
-                      type="button"
-                      className="api-key-link"
-                      onClick={() => openExternal(p.keyUrl)}
-                    >
-                      {t("settings.getKey")}
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
+            <ApiPresets keyLabel={t("settings.getKey")} />
           </div>
           <Field label={t("settings.baseUrl")} hint={t("settings.baseUrlHint")}>
             <input

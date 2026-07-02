@@ -31,10 +31,29 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
 
+  /* Error/red status palette (toast, setup banner). */
+  --error-bg: #fdecec;
+  --error-border: #f3c0c0;
+  --error-text: #8a1f1f;
+
+  /* Status tints. Deliberately NOT overridden in dark theme — these rendered
+     frozen-in-dark before tokenization and must keep computing identically. */
+  --danger: #e5484d; /* live/danger red (recording dot, remove-lang hover) */
+  --status-error: #b5573a; /* error/recording tint; equals light --accent-hover
+     by coincidence — must NOT track it (dark --accent-hover differs) */
+
+  /* Dropdown chevron shared by the transcript and settings selects. Note: the
+     stroke is the light-theme --text-muted; a theme-aware chevron would be a
+     visible change — tracked as a follow-up. */
+  --select-chevron: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239a9892' stroke-width='2'><path d='M6 9l6 6 6-6'/></svg>");
+
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
     Arial, sans-serif;
 
   --sidebar-w: 260px;
+  /* 2-pane transcript template: text | centered timestamp | text. Shared by the
+     column headers, message rows and foreign-row translations. */
+  --pane-grid: 1fr 56px 1fr;
 }
 
 :root[data-theme="dark"] {
@@ -58,6 +77,10 @@
 
   --lang-a: #6fb3d2;
   --lang-b: #d2a06f;
+
+  --error-bg: #3a1d1d;
+  --error-border: #6b2e2e;
+  --error-text: #f4c7c7;
 }
 
 * {

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useApp } from "../state/AppState";
 import { getBackend } from "../backend";
-import { API_PROVIDERS, LOCAL_DOWNLOADS, type DownloadLink } from "../data/models";
-import { DownloadHint, openExternal } from "./settings/common";
+import { LOCAL_DOWNLOADS, type DownloadLink } from "../data/models";
+import { ApiPresets, deriveProviderModes, DownloadHint } from "./settings/common";
+import Modal from "./Modal";
 
 /** A path input with a live "file exists" check (green ✓ / red ✗) plus an
  *  optional download link, so the user can see at a glance what's still missing. */
@@ -63,28 +64,21 @@ export default function SetupWizard() {
 
   if (!wizardOpen) return null;
 
-  const sttLocal = settings.sttMode === "local";
-  const translationLocal = settings.translationMode === "local";
-  const anyLocal = sttLocal || translationLocal;
-  const anyApi = !sttLocal || !translationLocal;
+  const { sttLocal, translationLocal, anyLocal, anyApi } =
+    deriveProviderModes(settings);
   const ready = setupIssues.length === 0;
 
   const pickScenario = (stt: "local" | "api", tr: "local" | "api") =>
     updateSettings({ sttMode: stt, translationMode: tr });
 
+  // NB: for the config-file-only combo sttMode="api"+translationMode="local"
+  // this highlights "cloud" while ProviderSection highlights nothing — a known
+  // divergence, kept as-is (unifying it would be a behavior change).
   const scenario =
     sttLocal && translationLocal ? "local" : sttLocal ? "mixed" : "cloud";
 
   return (
-    <div className="modal-backdrop" onClick={closeWizard}>
-      <div className="modal wizard-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <h2>Добро пожаловать в KaigiAI</h2>
-          <button className="close-btn" onClick={closeWizard} aria-label="Close">
-            ✕
-          </button>
-        </div>
-
+    <Modal title="Добро пожаловать в KaigiAI" className="wizard-modal" onClose={closeWizard}>
         {step === "welcome" ? (
           <div className="modal-body wizard-body">
             <p className="wizard-lead">
@@ -137,29 +131,7 @@ export default function SetupWizard() {
             {anyApi && (
               <>
                 <p className="wizard-step-title">2. Облако: ключ</p>
-                <div className="api-presets">
-                  {API_PROVIDERS.map((p) => (
-                    <div key={p.id} className="api-preset">
-                      <button
-                        type="button"
-                        className="api-preset-select"
-                        onClick={() => updateSettings({ apiBaseUrl: p.baseUrl })}
-                      >
-                        <span className="api-preset-name">{p.name}</span>
-                        <span className="api-preset-note">{p.note}</span>
-                      </button>
-                      {p.keyUrl && (
-                        <button
-                          type="button"
-                          className="api-key-link"
-                          onClick={() => openExternal(p.keyUrl)}
-                        >
-                          Получить ключ →
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                <ApiPresets keyLabel="Получить ключ →" />
                 <div className="wiz-field">
                   <div className="wiz-field-label">
                     <span>Base URL</span>
@@ -253,7 +225,6 @@ export default function SetupWizard() {
             </div>
           </div>
         )}
-      </div>
-    </div>
+    </Modal>
   );
 }

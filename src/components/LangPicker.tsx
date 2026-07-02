@@ -1,30 +1,46 @@
 import { useState } from "react";
-import { LANGUAGES } from "../data/languages";
 
 interface Props {
-  /** Languages already chosen — excluded from the list (or disabled). */
-  exclude: string[];
-  /** Compact "+ язык" trigger label. */
-  label?: string;
+  /** Language codes offered in the menu, in display order. */
+  options: string[];
+  /** Label for an option (nativeName for the add-picker, languageName for ⇄). */
+  renderLabel: (code: string) => string;
   onPick: (code: string) => void;
-  disabled?: boolean;
+  /** Trigger button label. */
+  label?: string;
+  /** Trigger button tooltip. */
+  title?: string;
+  /** Optional heading rendered at the top of the menu. */
+  header?: string;
+  /** Wrapper class — "lang-reassign" anchors the ⇄ variant's hover-reveal CSS. */
+  className?: string;
+  triggerClassName?: string;
 }
 
-/** A small "+ язык" button that opens a dropdown of languages not yet in the
- *  conversation, used to grow a 2-language chat into the N-column grid (§10.7). */
-export default function LangPicker({ exclude, label = "＋ язык", onPick, disabled }: Props) {
+/** Dropdown of language codes behind a small trigger button. Two callers share
+ *  it: the "＋ язык" control that grows a chat into the N-column grid, and the
+ *  per-row ⇄ control that reassigns which language a message was spoken in
+ *  (§10.7) — same backdrop/menu/item structure, different trigger and options. */
+export default function LangPicker({
+  options,
+  renderLabel,
+  onPick,
+  label = "＋ язык",
+  title = "Добавить язык в разговор",
+  header,
+  className = "lang-picker",
+  triggerClassName = "lang-add-btn",
+}: Props) {
   const [open, setOpen] = useState(false);
-  const available = LANGUAGES.filter((l) => !exclude.includes(l.code));
-  if (available.length === 0) return null;
+  if (options.length === 0) return null;
 
   return (
-    <span className="lang-picker">
+    <span className={className}>
       <button
         type="button"
-        className="lang-add-btn"
-        disabled={disabled}
+        className={triggerClassName}
         onClick={() => setOpen((v) => !v)}
-        title="Добавить язык в разговор"
+        title={title}
       >
         {label}
       </button>
@@ -32,17 +48,18 @@ export default function LangPicker({ exclude, label = "＋ язык", onPick, di
         <>
           <div className="lang-picker-backdrop" onClick={() => setOpen(false)} />
           <div className="lang-picker-menu" role="menu">
-            {available.map((l) => (
+            {header && <div className="lang-picker-label">{header}</div>}
+            {options.map((code) => (
               <button
-                key={l.code}
+                key={code}
                 type="button"
                 className="lang-picker-item"
                 onClick={() => {
-                  onPick(l.code);
+                  onPick(code);
                   setOpen(false);
                 }}
               >
-                {l.nativeName}
+                {renderLabel(code)}
               </button>
             ))}
           </div>

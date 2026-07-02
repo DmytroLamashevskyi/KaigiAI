@@ -105,6 +105,23 @@ pub async fn save_settings(db: State<'_, Db>, mut settings: serde_json::Value) -
     db.save_settings(&settings).await.map_err(err)
 }
 
+/// Build the translation provider for a command: load settings, restore the
+/// keychain API key, and (in local mode) make sure the llama sidecar is up,
+/// pointing the provider at its actual URL. Shared by every LLM-backed command
+/// so the local-URL injection can't silently drift between call sites.
+async fn translation_provider(
+    db: &Db,
+    sidecars: &Sidecars,
+) -> CmdResult<Box<dyn provider::TranslationProvider>> {
+    let mut settings = db.get_app_settings().await.map_err(err)?;
+    inject_api_key(&mut settings);
+    if provider::translation_is_local(&settings) {
+        let url = sidecars.ensure_llama(&settings)?;
+        set_str(&mut settings, "localLlmBaseUrl", url);
+    }
+    Ok(provider::translation_from_settings(&settings))
+}
+
 #[tauri::command]
 pub async fn translate_text(
     db: State<'_, Db>,
@@ -113,13 +130,8 @@ pub async fn translate_text(
     from: String,
     to: String,
 ) -> CmdResult<String> {
-    let mut settings = db.get_app_settings().await.map_err(err)?;
-    inject_api_key(&mut settings);
-    if provider::translation_is_local(&settings) {
-        let url = sidecars.ensure_llama(&settings)?;
-        set_str(&mut settings, "localLlmBaseUrl", url);
-    }
-    provider::translation_from_settings(&settings)
+    translation_provider(&db, &sidecars)
+        .await?
         .translate(&text, &from, &to, "")
         .await
 }
@@ -154,13 +166,8 @@ pub async fn summarize_conversation(
             .unwrap_or(0);
         transcript = format!("…\n{}", &transcript[start..]);
     }
-    let mut settings = db.get_app_settings().await.map_err(err)?;
-    inject_api_key(&mut settings);
-    if provider::translation_is_local(&settings) {
-        let url = sidecars.ensure_llama(&settings)?;
-        set_str(&mut settings, "localLlmBaseUrl", url);
-    }
-    provider::translation_from_settings(&settings)
+    translation_provider(&db, &sidecars)
+        .await?
         .summarize(&transcript, &lang)
         .await
 }
@@ -187,13 +194,8 @@ pub async fn generate_title(
             break;
         }
     }
-    let mut settings = db.get_app_settings().await.map_err(err)?;
-    inject_api_key(&mut settings);
-    if provider::translation_is_local(&settings) {
-        let url = sidecars.ensure_llama(&settings)?;
-        set_str(&mut settings, "localLlmBaseUrl", url);
-    }
-    provider::translation_from_settings(&settings)
+    translation_provider(&db, &sidecars)
+        .await?
         .title(&transcript, &lang)
         .await
 }
