@@ -252,6 +252,7 @@ fn normalize_lang(raw: &str) -> String {
         "uk" | "ukrainian" => "uk",
         "pl" | "polish" => "pl",
         "tr" | "turkish" => "tr",
+        "id" | "indonesian" => "id",
         "ar" | "arabic" => "ar",
         other => other,
     };

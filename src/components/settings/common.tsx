@@ -33,7 +33,15 @@ export function ApiPresets({ keyLabel }: { keyLabel: string }) {
           <button
             type="button"
             className="api-preset-select"
-            onClick={() => updateSettings({ apiBaseUrl: p.baseUrl })}
+            onClick={() =>
+              updateSettings({
+                apiBaseUrl: p.baseUrl,
+                // Also switch to the provider's known-good models — the app's
+                // defaults are local-mode names a cloud provider 404s on.
+                ...(p.sttModel ? { sttModel: p.sttModel } : {}),
+                ...(p.llmModel ? { llmModel: p.llmModel } : {}),
+              })
+            }
           >
             <span className="api-preset-name">{p.name}</span>
             <span className="api-preset-note">{p.note}</span>

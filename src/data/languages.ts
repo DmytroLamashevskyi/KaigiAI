@@ -15,6 +15,7 @@ export const LANGUAGES: Language[] = [
   { code: "uk", name: "Ukrainian", nativeName: "Українська" },
   { code: "pl", name: "Polish", nativeName: "Polski" },
   { code: "tr", name: "Turkish", nativeName: "Türkçe" },
+  { code: "id", name: "Indonesian", nativeName: "Bahasa Indonesia" },
   { code: "ar", name: "Arabic", nativeName: "العربية" },
 ];
 

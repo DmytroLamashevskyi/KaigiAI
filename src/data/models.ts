@@ -41,6 +41,11 @@ export interface ApiProviderInfo {
   baseUrl: string;
   keyUrl: string;
   note: string;
+  /** Recommended models applied when the preset is picked — the app's defaults
+   *  are local-mode names that don't exist on cloud providers (a Groq request
+   *  with the default llmModel 404s). Absent = leave the user's value alone. */
+  sttModel?: string;
+  llmModel?: string;
 }
 
 export const API_PROVIDERS: ApiProviderInfo[] = [
@@ -50,6 +55,9 @@ export const API_PROVIDERS: ApiProviderInfo[] = [
     baseUrl: "https://api.groq.com/openai/v1",
     keyUrl: "https://console.groq.com/keys",
     note: "Бесплатный тир, очень быстрый. Хостит Whisper large-v3 и быстрые LLM.",
+    // Verified against api.groq.com/openai/v1/models (2026-07).
+    sttModel: "whisper-large-v3",
+    llmModel: "llama-3.3-70b-versatile",
   },
   {
     id: "gemini",
@@ -57,6 +65,8 @@ export const API_PROVIDERS: ApiProviderInfo[] = [
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     keyUrl: "https://aistudio.google.com/app/apikey",
     note: "Бесплатный тир (Gemini Flash). Хорош для перевода.",
+    // Gemini has no Whisper endpoint — leave sttModel alone (the UI warns).
+    llmModel: "gemini-2.5-flash",
   },
   {
     id: "openai",
@@ -64,5 +74,6 @@ export const API_PROVIDERS: ApiProviderInfo[] = [
     baseUrl: "http://localhost:11434/v1",
     keyUrl: "",
     note: "Ollama / LM Studio / vLLM / корпоративный сервер — укажите base URL.",
+    // Models depend on what the user's server hosts — don't touch them.
   },
 ];

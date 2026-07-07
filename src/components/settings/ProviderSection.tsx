@@ -226,7 +226,10 @@ export default function ProviderSection() {
             </>
           )}
           {!translationLocal && (
-            <Field label="Модель перевода (LLM)">
+            <Field
+              label="Модель перевода (LLM)"
+              hint="Для Groq: llama-3.3-70b-versatile · Gemini: gemini-2.5-flash"
+            >
               <input
                 className="settings-input"
                 value={settings.llmModel}
