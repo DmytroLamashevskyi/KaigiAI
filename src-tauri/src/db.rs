@@ -298,14 +298,16 @@ impl Db {
         let (msg_sql, tr_sql) = match conversation_id {
             Some(_) => (
                 format!(
-                    "SELECT {MSG_COLS} FROM message WHERE conversation_id = ? ORDER BY created_at ASC"
+                    // rowid tie-break: split-segment parts can persist within the same
+                    // millisecond; insert order must survive a reload.
+                    "SELECT {MSG_COLS} FROM message WHERE conversation_id = ? ORDER BY created_at ASC, rowid ASC"
                 ),
                 "SELECT mt.message_id, mt.lang, mt.text FROM message_translation mt \
                  JOIN message m ON m.id = mt.message_id WHERE m.conversation_id = ?"
                     .to_string(),
             ),
             None => (
-                format!("SELECT {MSG_COLS} FROM message ORDER BY created_at ASC"),
+                format!("SELECT {MSG_COLS} FROM message ORDER BY created_at ASC, rowid ASC"),
                 "SELECT message_id, lang, text FROM message_translation".to_string(),
             ),
         };

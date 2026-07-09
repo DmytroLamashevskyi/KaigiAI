@@ -14,6 +14,7 @@
 pub mod api;
 pub mod diarize;
 pub mod mock;
+pub mod segment;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -158,6 +159,26 @@ pub fn stt_from_settings(settings: &serde_json::Value) -> Box<dyn SttProvider> {
         Box::new(api_from_settings(settings))
     } else {
         Box::new(mock::MockProvider)
+    }
+}
+
+/// Speaker-turn segmenter (§10.15): splits a VAD segment at speaker changes.
+/// `None` when no segmentation model is configured (feature off, previous
+/// pause-only behavior) or the model fails to load.
+pub fn segmenter_from_settings(settings: &serde_json::Value) -> Option<segment::OnnxSegmenter> {
+    let path = settings
+        .get("segmentationModelPath")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if path.is_empty() {
+        return None;
+    }
+    match segment::OnnxSegmenter::new(path, crate::audio::SAMPLE_RATE) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            log::error!("speaker segmentation disabled: {e}");
+            None
+        }
     }
 }
 

@@ -1,12 +1,33 @@
 import { useState } from "react";
 import type { Conversation, Message } from "../types";
-import { displaySpeaker } from "../types";
-import { languageName } from "../data/languages";
-import { useApp } from "../state/AppState";
+import { conversationLangs, displaySpeaker } from "../types";
+import { languageName, LANGUAGES } from "../data/languages";
+import { useApp, MAX_LANGS } from "../state/AppState";
 
 interface Props {
   message: Message;
   conversation: Conversation;
+}
+
+/** Inline offer on a "foreign" row to add the detected language to the
+ *  conversation (§10.7). Only for catalog languages, below the language cap.
+ *  New utterances (and the running recording — the pipeline re-reads langs per
+ *  segment) start translating into it; history isn't back-translated. */
+export function AddLangOffer({ conv, lang }: { conv: Conversation; lang: string }) {
+  const { setLanguages } = useApp();
+  const langs = conversationLangs(conv);
+  const known = LANGUAGES.some((l) => l.code === lang);
+  if (!known || langs.includes(lang) || langs.length >= MAX_LANGS) return null;
+  return (
+    <button
+      type="button"
+      className="add-lang-offer"
+      title={`Добавить ${languageName(lang)} в языки беседы — новые реплики будут переводиться и на него`}
+      onClick={() => setLanguages([...langs, lang])}
+    >
+      ＋ в беседу
+    </button>
+  );
 }
 
 /** System wall-clock time the message was recorded (HH:MM:SS, local). The full
@@ -199,6 +220,7 @@ export default function TranscriptRow({ message, conversation }: Props) {
             />
           )}
           <span className="lang-badge">{languageName(message.detectedLang)}</span>
+          <AddLangOffer conv={conversation} lang={message.detectedLang} />
           <span className="cell-text">{message.originalText}</span>
         </div>
         <div className="foreign-translations">

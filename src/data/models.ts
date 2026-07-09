@@ -12,7 +12,13 @@ export const LOCAL_DOWNLOADS: {
   llamaServer: DownloadLink;
   whisperModels: DownloadLink;
   llmModels: DownloadLink;
+  segmentationModel: DownloadLink;
 } = {
+  segmentationModel: {
+    label: "Модель сегментации (pyannote, ONNX)",
+    url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+    note: "Распакуйте архив и укажите путь к model.onnx.",
+  },
   whisperServer: {
     label: "whisper.cpp (whisper-server)",
     url: "https://github.com/ggml-org/whisper.cpp/releases",

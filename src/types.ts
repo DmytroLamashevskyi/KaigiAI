@@ -145,6 +145,9 @@ export interface Settings {
   localWhisperPath: string; // GGML/GGUF whisper model (local mode)
   localLlmPath: string; // GGUF instruct model (local mode)
   diarizationModelPath: string; // ONNX speaker-embedding model; empty = diarization off
+  /** ONNX speaker-turn segmentation model (pyannote segmentation-3.0, §10.15):
+   *  splits an utterance where the speaker changes without a pause. Empty = off. */
+  segmentationModelPath: string;
   nGpuLayers: number; // layers offloaded to GPU; 0 = CPU-only
   audioDevice: string; // empty = system default
   audioSource: AudioSource;

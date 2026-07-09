@@ -21,13 +21,16 @@ import { getBackend } from "../backend";
 import { isRtl } from "../i18n";
 import { useRecordingEvents } from "./useRecordingEvents";
 import {
+  conversationCsv,
   conversationMarkdown,
   conversationPrintHtml,
   detectMessageLang,
+  downloadFile,
   errMsg,
   logErr,
   makeId,
   migrateSettings,
+  printHtmlViaIframe,
   translateAll,
 } from "./helpers";
 
@@ -51,6 +54,7 @@ const DEFAULT_SETTINGS: Settings = {
   localWhisperPath: "",
   localLlmPath: "",
   diarizationModelPath: "",
+  segmentationModelPath: "",
   nGpuLayers: 0,
   audioDevice: "",
   audioSource: "mic",
@@ -129,6 +133,8 @@ interface AppContextValue {
   closeExport: () => void;
   /** Save the conversation as a Markdown file. */
   exportMarkdown: (id: string) => void;
+  /** Save the conversation as CSV (one row per message, a column per language). */
+  exportCsv: (id: string) => void;
   /** Open a print-ready view and trigger the system print dialog ("Save as
    *  PDF") — keeps Japanese/Cyrillic glyphs correct via system fonts. */
   exportPdf: (id: string) => void;
@@ -637,54 +643,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const conv = conversations.find((c) => c.id === id);
         if (!conv) return;
         const md = conversationMarkdown(conv, messages[id] ?? []);
-        const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `${conv.title}.md`;
-        a.click();
-        URL.revokeObjectURL(url);
+        downloadFile(md, `${conv.title}.md`, "text/markdown;charset=utf-8");
+        setExportId(null);
+      },
+      exportCsv: (id) => {
+        const conv = conversations.find((c) => c.id === id);
+        if (!conv) return;
+        const csv = conversationCsv(conv, messages[id] ?? []);
+        downloadFile(csv, `${conv.title}.csv`, "text/csv;charset=utf-8");
         setExportId(null);
       },
       exportPdf: (id) => {
         const conv = conversations.find((c) => c.id === id);
         if (!conv) return;
-        // Print a clean transcript via a hidden iframe → the system print dialog
-        // ("Save as PDF"). An iframe works in the Tauri webview (window.open does
-        // not), and WebView2's print uses real system fonts so Japanese/Cyrillic
-        // render correctly (a bundled-font PDF generator wouldn't).
-        const html = conversationPrintHtml(conv, messages[id] ?? []);
-        const iframe = document.createElement("iframe");
-        iframe.setAttribute("aria-hidden", "true");
-        Object.assign(iframe.style, {
-          position: "fixed",
-          right: "0",
-          bottom: "0",
-          width: "0",
-          height: "0",
-          border: "0",
-        });
-        document.body.appendChild(iframe);
-        const cleanup = () => {
-          if (iframe.parentNode) iframe.remove();
-        };
-        const cw = iframe.contentWindow;
-        if (cw) {
-          cw.document.open();
-          cw.document.write(html);
-          cw.document.close();
-          cw.onafterprint = () => setTimeout(cleanup, 300);
-          setTimeout(() => {
-            cw.focus();
-            cw.print();
-          }, 250);
-          // Fallback: onafterprint doesn't fire if the user cancels the print
-          // dialog, so remove the iframe unconditionally after a while to avoid
-          // leaking the full transcript HTML in the DOM.
-          setTimeout(cleanup, 60_000);
-        } else {
-          cleanup();
-        }
+        printHtmlViaIframe(conversationPrintHtml(conv, messages[id] ?? []));
         setExportId(null);
       },
       exportZip: (id) => {

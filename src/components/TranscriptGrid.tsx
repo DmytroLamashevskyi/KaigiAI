@@ -7,7 +7,7 @@ import { languageName, LANGUAGES } from "../data/languages";
 import { isRtl } from "../i18n";
 import { useAutoScroll } from "../hooks/useAutoScroll";
 import { useT } from "../i18n/useT";
-import { SpeakerBadge } from "./TranscriptRow";
+import { AddLangOffer, SpeakerBadge } from "./TranscriptRow";
 import PendingRow, { TranscriptEmpty } from "./PendingRow";
 import LangPicker from "./LangPicker";
 import LangCodeSelect from "./LangCodeSelect";
@@ -136,7 +136,10 @@ export default function TranscriptGrid({ conversation }: { conversation: Convers
                       <SpeakerBadge conv={conversation} label={m.speaker} messageId={m.id} />
                     )}
                     {foreign && (
-                      <span className="lang-badge">{languageName(m.detectedLang)}</span>
+                      <>
+                        <span className="lang-badge">{languageName(m.detectedLang)}</span>
+                        <AddLangOffer conv={conversation} lang={m.detectedLang} />
+                      </>
                     )}
                     {/* ⇄: correct which language the utterance was spoken in
                         (N-language manual fix) — re-translates into the rest. */}

@@ -360,7 +360,11 @@
 /* Column headers */
 .col-headers {
   display: grid;
-  grid-template-columns: var(--pane-grid);
+  /* NOT --pane-grid: the middle hosts the ⇄ swap + "＋ язык" controls, which
+     are wider than the rows' 56px timestamp column — a fixed 56px made the
+     picker overflow under the right cell, swallowing its clicks. `auto` sizes
+     to the controls while the 1fr sides keep the columns symmetric. */
+  grid-template-columns: 1fr auto 1fr;
   column-gap: 10px;
   padding: 10px 24px 6px;
   border-bottom: 1px solid var(--border);
@@ -392,6 +396,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
+  /* Defensive symmetry with the rows' 56px timestamp column. Today the middle
+     always holds at least the "＋ язык" trigger (this header only renders for
+     ≤2-language conversations, below MAX_LANGS), so this only matters if a
+     future state ever empties the middle. */
+  min-width: 56px;
 }
 
 .present-btn {
@@ -675,6 +685,28 @@
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.02em;
+}
+
+/* Inline "add this detected language to the conversation" offer on foreign
+   rows (§10.7) — dashed accent pill, quieter than the badge next to it. */
+.add-lang-offer {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
+  padding: 0 8px;
+  border-radius: 9px;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.add-lang-offer:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* Input bar (bottom) */
@@ -1059,6 +1091,25 @@
 }
 .api-key-link:hover {
   text-decoration: underline;
+}
+
+/* Input + download hint stacked inside a settings Field (whose .field-control
+   is a row): keeps the input full-width with the hint underneath instead of
+   the two fighting for horizontal space. */
+.control-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.control-stack .settings-input {
+  width: 260px;
+}
+.control-stack .dl-hint {
+  margin: 0;
+  align-items: flex-end;
+  text-align: right;
+  max-width: 320px;
 }
 
 .dl-hint {
@@ -1695,6 +1746,15 @@
   font-size: 11px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+}
+/* Inside the flex meta row the gap owns all spacing — zero the pills' inline
+   margin-right (which is load-bearing in the inline .foreign-original flow)
+   so badge/offer/⇄ seams stay an even 8px instead of stacking to 14px. */
+.grid-msg-meta .speaker-badge,
+.grid-msg-meta .speaker-edit,
+.grid-msg-meta .lang-badge,
+.grid-msg-meta .add-lang-offer {
+  margin-right: 0;
 }
 .grid-msg-original {
   font-size: calc(14.5px * var(--fs-scale, 1));

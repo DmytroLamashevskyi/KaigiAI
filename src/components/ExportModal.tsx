@@ -5,8 +5,15 @@ import Modal from "./Modal";
  *  system print dialog → "Save as PDF", which renders Japanese/Cyrillic with
  *  real system fonts). Opened from the conversation menu in the sidebar. */
 export default function ExportModal() {
-  const { exportId, closeExport, exportMarkdown, exportPdf, exportZip, conversations } =
-    useApp();
+  const {
+    exportId,
+    closeExport,
+    exportMarkdown,
+    exportCsv,
+    exportPdf,
+    exportZip,
+    conversations,
+  } = useApp();
   if (!exportId) return null;
   const conv = conversations.find((c) => c.id === exportId);
 
@@ -28,6 +35,13 @@ export default function ExportModal() {
           <span className="export-choice-icon">⤓</span>
           <span className="export-choice-name">Markdown</span>
           <span className="export-choice-note">Текстовый файл .md.</span>
+        </button>
+        <button className="export-choice" onClick={() => exportCsv(exportId)}>
+          <span className="export-choice-icon">📊</span>
+          <span className="export-choice-name">CSV</span>
+          <span className="export-choice-note">
+            Таблица: реплика в строке, колонка на каждый язык. Открывается в Excel.
+          </span>
         </button>
         <button className="export-choice" onClick={() => exportZip(exportId)}>
           <span className="export-choice-icon">🗜</span>

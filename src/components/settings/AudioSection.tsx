@@ -1,6 +1,7 @@
 import { useApp } from "../../state/AppState";
 import { useT } from "../../i18n/useT";
-import { Field, Section, useAudioInputs } from "./common";
+import { LOCAL_DOWNLOADS } from "../../data/models";
+import { DownloadHint, Field, Section, useAudioInputs } from "./common";
 
 export default function AudioSection() {
   const { settings, updateSettings } = useApp();
@@ -90,7 +91,7 @@ export default function AudioSection() {
         <input
           className="settings-input"
           value={settings.exportDir}
-          placeholder="C:\\Users\\you\\Documents\\KaigiAI"
+          placeholder="C:\Users\you\Documents\KaigiAI"
           onChange={(e) => updateSettings({ exportDir: e.target.value })}
         />
       </Field>
@@ -101,9 +102,23 @@ export default function AudioSection() {
         <input
           className="settings-input"
           value={settings.diarizationModelPath}
-          placeholder="C:\\models\\voxceleb_resnet34.onnx"
+          placeholder="C:\models\voxceleb_resnet34.onnx"
           onChange={(e) => updateSettings({ diarizationModelPath: e.target.value })}
         />
+      </Field>
+      <Field
+        label={t("settings.segmentationModel")}
+        hint={t("settings.segmentationModelHint")}
+      >
+        <div className="control-stack">
+          <input
+            className="settings-input"
+            value={settings.segmentationModelPath}
+            placeholder="C:\models\pyannote-segmentation-3-0\model.onnx"
+            onChange={(e) => updateSettings({ segmentationModelPath: e.target.value })}
+          />
+          <DownloadHint link={LOCAL_DOWNLOADS.segmentationModel} />
+        </div>
       </Field>
     </Section>
   );

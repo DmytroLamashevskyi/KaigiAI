@@ -194,3 +194,99 @@ export function conversationPrintHtml(conv: Conversation, msgs: Message[]): stri
 ${rows}
 </body></html>`;
 }
+
+/** A self-printing HTML page for the AI summary (Save-as-PDF via print). */
+export function summaryPrintHtml(title: string, summary: string): string {
+  const t = escapeHtml(title);
+  const date = escapeHtml(new Date().toLocaleString());
+  // The summary is plain markdown-ish text; print it preformatted so lists and
+  // line breaks survive without pulling in a markdown renderer.
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${t}</title>
+<style>
+  body{font-family:"Segoe UI",system-ui,sans-serif;color:#1a1a1a;margin:32px;line-height:1.55}
+  h1{font-size:20px;margin:0 0 2px}
+  .sub{color:#666;font-size:12px;margin-bottom:20px}
+  pre{white-space:pre-wrap;word-break:break-word;font:inherit;margin:0}
+</style></head><body>
+<h1>${t}</h1><div class="sub">${date}</div>
+<pre>${escapeHtml(summary)}</pre>
+</body></html>`;
+}
+
+/** Print an HTML document via a hidden iframe → the system print dialog
+ *  ("Save as PDF"). An iframe works in the Tauri webview (window.open does
+ *  not), and WebView2's print uses real system fonts so Japanese/Cyrillic
+ *  render correctly (a bundled-font PDF generator wouldn't). */
+export function printHtmlViaIframe(html: string): void {
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  Object.assign(iframe.style, {
+    position: "fixed",
+    right: "0",
+    bottom: "0",
+    width: "0",
+    height: "0",
+    border: "0",
+  });
+  document.body.appendChild(iframe);
+  const cleanup = () => {
+    if (iframe.parentNode) iframe.remove();
+  };
+  const cw = iframe.contentWindow;
+  if (!cw) {
+    cleanup();
+    return;
+  }
+  cw.document.open();
+  cw.document.write(html);
+  cw.document.close();
+  cw.onafterprint = () => setTimeout(cleanup, 300);
+  setTimeout(() => {
+    cw.focus();
+    cw.print();
+  }, 250);
+  // Fallback: onafterprint doesn't fire if the user cancels the print dialog,
+  // so remove the iframe unconditionally after a while to avoid leaking the
+  // printed HTML in the DOM.
+  setTimeout(cleanup, 60_000);
+}
+
+/** Trigger a browser download of `content` as `filename`. */
+export function downloadFile(content: string, filename: string, mime: string): void {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/** RFC 4180 CSV field: quote when needed, double inner quotes. A leading '=',
+ *  '+', '-', '@', tab or CR gets an apostrophe prefix so Excel/Sheets don't
+ *  execute the cell as a formula (CSV injection, CWE-1236) — utterances and
+ *  LLM translations are third-party-controlled text. */
+function csvField(v: string): string {
+  const safe = /^[=+\-@\t\r]/.test(v) ? "'" + v : v;
+  return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+}
+
+/** CSV export of a conversation: one row per message with the wall-clock time,
+ *  speaker, spoken language, original text, and one column per conversation
+ *  language (§10.7). Prefixed with a BOM so Excel opens UTF-8 correctly. */
+export function conversationCsv(conv: Conversation, msgs: Message[]): string {
+  const langs = conversationLangs(conv);
+  const header = ["time", "speaker", "language", "original", ...langs.map(languageName)];
+  const rows = msgs.map((m) => {
+    const cells = [
+      new Date(m.createdAt).toLocaleString(),
+      displaySpeaker(conv, m.speaker) ?? "",
+      languageName(m.detectedLang),
+      m.originalText,
+      // textForLang already returns originalText when lang === detectedLang.
+      ...langs.map((lang) => textForLang(m, lang, conv)),
+    ];
+    return cells.map(csvField).join(",");
+  });
+  return "\uFEFF" + [header.map(csvField).join(","), ...rows].join("\r\n") + "\r\n";
+}

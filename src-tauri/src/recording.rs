@@ -84,15 +84,24 @@ struct SessionConfig {
     save_audio: bool,
 }
 
+/// A conversation's ordered language list (§10.7): the `langs` array, falling
+/// back to `[lang_a, lang_b]` for rows that predate multi-language. DB-sourced
+/// rows are already normalized by `row_to_conversation`; the fallback also
+/// covers hand-built Conversations (tests) and keeps this module independent
+/// of that invariant.
+fn conv_langs(conv: &Conversation) -> Vec<String> {
+    if conv.langs.is_empty() {
+        vec![conv.lang_a.clone(), conv.lang_b.clone()]
+    } else {
+        conv.langs.clone()
+    }
+}
+
 impl SessionConfig {
     fn from_settings(settings: &serde_json::Value, conv: &Conversation) -> Self {
         // Conversation languages (§10.7). For a 2-language chat this is just
         // [lang_a, lang_b]; with 3+ it drives N-way translation and the grid UI.
-        let langs: Vec<String> = if conv.langs.is_empty() {
-            vec![conv.lang_a.clone(), conv.lang_b.clone()]
-        } else {
-            conv.langs.clone()
-        };
+        let langs = conv_langs(conv);
         let source = match settings.get("audioSource").and_then(|v| v.as_str()) {
             Some("system") => AudioSource::System,
             _ => AudioSource::Mic,
@@ -156,12 +165,33 @@ struct PipelineCtx {
     app: AppHandle,
     db: Db,
     conv_id: String,
-    /// Conversation languages — also whisper's decoding hint.
+    /// Conversation languages at session start — the fallback when the per-
+    /// segment refresh can't reach the DB. `process_segment` re-reads the live
+    /// list each utterance so a language added mid-recording (§10.7) starts
+    /// being translated immediately, without restarting the session.
     langs: Vec<String>,
     detect_foreign: bool,
     stt: Box<dyn provider::SttProvider>,
     translator: Box<dyn provider::TranslationProvider>,
     audio_dir: Option<std::path::PathBuf>,
+}
+
+impl PipelineCtx {
+    /// The conversation's CURRENT languages: re-read from the DB so mid-session
+    /// changes (adding/removing a language in the UI) reach the pipeline.
+    /// `None` means the conversation was deleted mid-recording — the segment
+    /// must be dropped (persisting it would fail the FK anyway). A transient DB
+    /// error falls back to the session-start snapshot.
+    async fn live_langs(&self) -> Option<Vec<String>> {
+        match self.db.get_conversation(&self.conv_id).await {
+            Ok(Some(conv)) => Some(conv_langs(&conv)),
+            Ok(None) => None,
+            Err(e) => {
+                log::error!("live langs re-read failed, using session snapshot: {e}");
+                Some(self.langs.clone())
+            }
+        }
+    }
 }
 
 /// Tauri-managed recording state. Holds the stop handle of the active session,
@@ -231,13 +261,25 @@ impl Recorder {
         };
         // Per-session diarizer: labels are stable within this conversation only.
         let mut diarizer = provider::diarizer_from_settings(&settings);
+        // Optional speaker-turn segmenter (§10.15): cuts a VAD segment where the
+        // speaker changes without a pause, so each turn is processed separately.
+        let mut segmenter = provider::segmenter_from_settings(&settings);
         // Cloned for the controller thread (it emits silence/abort events itself —
         // they originate from the VAD on the worker thread, not the async pipeline).
         let ctl_app = app;
         let ctl_conv_id = conv_id;
         tauri::async_runtime::spawn(async move {
             while let Some((pcm, end_ms, pending_id, emitted_at)) = seg_rx.recv().await {
-                process_segment(&ctx, &mut diarizer, pcm, end_ms, pending_id, emitted_at).await;
+                process_segment(
+                    &ctx,
+                    &mut diarizer,
+                    &mut segmenter,
+                    pcm,
+                    end_ms,
+                    pending_id,
+                    emitted_at,
+                )
+                .await;
             }
         });
 
@@ -324,20 +366,22 @@ impl Recorder {
     }
 }
 
-/// One utterance through the pipeline: emit the processing placeholder, STT,
-/// noise filter, language resolution, N-way translation, diarization, persist,
-/// optional WAV clip, and the final `transcript-message` event. Extracted from
-/// `Recorder::start`'s segment loop verbatim (each `continue` became `return`).
+/// One VAD segment through the pipeline. Emits the processing placeholder,
+/// re-reads the live language list, optionally cuts the segment at speaker
+/// changes (§10.15), and runs each part as its own utterance. The placeholder
+/// is resolved by the first part's `transcript-message`; if NO part produced a
+/// message (all noise / STT failed / conversation deleted), it is cancelled.
 async fn process_segment(
     ctx: &PipelineCtx,
     diarizer: &mut Box<dyn provider::diarize::Diarizer>,
+    segmenter: &mut Option<provider::segment::OnnxSegmenter>,
     pcm: Vec<f32>,
     end_ms: i64,
     pending_id: u64,
     emitted_at: Instant,
 ) {
     let dur_ms = (pcm.len() as f64 / SAMPLE_RATE as f64 * 1000.0) as i64;
-    let start_ms = (end_ms - dur_ms).max(0);
+    let seg_start_ms = (end_ms - dur_ms).max(0);
     // The segment finalized: swap the UI's silence-countdown bar for a
     // processing shimmer while STT + translation run (§10.8).
     let _ = ctx.app.emit(
@@ -347,23 +391,136 @@ async fn process_segment(
             conversation_id: ctx.conv_id.clone(),
         },
     );
-    // The conversation languages double as whisper's decoding hint.
-    let transcript = match ctx.stt.transcribe(&pcm, SAMPLE_RATE, &ctx.langs).await {
-        Ok(t) => t,
-        Err(e) => {
-            log::error!("STT failed: {e}");
-            emit_error(&ctx.app, format!("Speech recognition failed: {e}"));
-            let _ = ctx
-                .app
-                .emit(SEGMENT_CANCELLED_EVENT, SegmentCancelled { pending_id });
-            return;
-        }
-    };
-    if transcript.text.is_empty() || is_noise(&transcript.text) {
+    // Re-read the conversation's languages so a language added mid-recording
+    // is picked up from this utterance on (§10.7) — no session restart needed.
+    // `None` = the conversation was deleted mid-recording: drop the segment
+    // (its placeholder included) instead of emitting a message the DB would
+    // reject on the conversation FK.
+    let Some(langs) = ctx.live_langs().await else {
         let _ = ctx
             .app
             .emit(SEGMENT_CANCELLED_EVENT, SegmentCancelled { pending_id });
         return;
+    };
+    // Speaker-turn cuts (§10.15): [0, cuts.., len] → part ranges. Without a
+    // segmenter the segment is processed whole, exactly as before. The ONNX
+    // inference is CPU-bound (~0.1–1 s for a long segment), so it hops to a
+    // blocking thread instead of stalling the shared async runtime.
+    let (cuts, pcm) = match segmenter.take() {
+        Some(mut s) => {
+            match tauri::async_runtime::spawn_blocking(move || {
+                let cuts = s.change_points(&pcm);
+                (cuts, pcm, s)
+            })
+            .await
+            {
+                Ok((cuts, pcm, s)) => {
+                    *segmenter = Some(s);
+                    (cuts, pcm)
+                }
+                Err(e) => {
+                    // The task panicked and took pcm with it — drop the segment
+                    // (and its placeholder); the segmenter stays disabled.
+                    log::error!("speaker segmentation task failed: {e}");
+                    let _ = ctx
+                        .app
+                        .emit(SEGMENT_CANCELLED_EVENT, SegmentCancelled { pending_id });
+                    return;
+                }
+            }
+        }
+        None => (Vec::new(), pcm),
+    };
+    if !cuts.is_empty() {
+        // Diagnosability: when phrases look truncated in the transcript, the log
+        // shows whether (and where) the segmenter cut them.
+        let at_ms: Vec<i64> = cuts
+            .iter()
+            .map(|&c| (c as f64 / SAMPLE_RATE as f64 * 1000.0) as i64)
+            .collect();
+        log::info!(
+            "speaker segmentation: {} cut(s) in a {} ms segment at {:?} ms",
+            cuts.len(),
+            dur_ms,
+            at_ms
+        );
+    }
+    let mut bounds = Vec::with_capacity(cuts.len() + 2);
+    bounds.push(0);
+    bounds.extend(cuts);
+    bounds.push(pcm.len());
+    let ms_of = |sample: usize| {
+        seg_start_ms + (sample as f64 / SAMPLE_RATE as f64 * 1000.0) as i64
+    };
+    // Per-part latency baseline: part 1 measures from VAD release (the classic
+    // §10.8 meaning); later parts from the previous part's finish, so each row
+    // reports its own incremental wait rather than a cumulative sum.
+    let mut part_started = emitted_at;
+    let last = bounds.len().saturating_sub(2);
+    for (i, pair) in bounds.windows(2).enumerate() {
+        let (a, b) = (pair[0], pair[1]);
+        if a >= b {
+            continue;
+        }
+        let emitted = process_utterance(
+            ctx,
+            diarizer,
+            &langs,
+            &pcm[a..b],
+            ms_of(a),
+            ms_of(b),
+            pending_id,
+            part_started,
+        )
+        .await;
+        part_started = Instant::now();
+        // The part's message resolved the placeholder; re-raise the processing
+        // shimmer while the remaining parts run so the UI still shows activity.
+        if emitted && i < last {
+            let _ = ctx.app.emit(
+                SEGMENT_PENDING_EVENT,
+                SegmentPending {
+                    pending_id,
+                    conversation_id: ctx.conv_id.clone(),
+                },
+            );
+        }
+    }
+    // Unconditional: clears the original placeholder when NO part produced a
+    // message, or a re-raised shimmer whose trailing part turned out to be
+    // noise. A no-op when the last message already resolved it.
+    let _ = ctx
+        .app
+        .emit(SEGMENT_CANCELLED_EVENT, SegmentCancelled { pending_id });
+}
+
+/// One utterance (a whole VAD segment, or one speaker turn of it) through the
+/// pipeline: STT, noise filter, language resolution, N-way translation,
+/// diarization, persist, optional WAV clip, and the `transcript-message` event.
+/// Returns whether a message was emitted (resolving the §10.8 placeholder).
+#[allow(clippy::too_many_arguments)]
+async fn process_utterance(
+    ctx: &PipelineCtx,
+    diarizer: &mut Box<dyn provider::diarize::Diarizer>,
+    langs: &[String],
+    pcm: &[f32],
+    start_ms: i64,
+    end_ms: i64,
+    pending_id: u64,
+    emitted_at: Instant,
+) -> bool {
+    let dur_ms = end_ms - start_ms;
+    // The conversation languages double as whisper's decoding hint.
+    let transcript = match ctx.stt.transcribe(pcm, SAMPLE_RATE, langs).await {
+        Ok(t) => t,
+        Err(e) => {
+            log::error!("STT failed: {e}");
+            emit_error(&ctx.app, format!("Speech recognition failed: {e}"));
+            return false;
+        }
+    };
+    if transcript.text.is_empty() || is_noise(&transcript.text) {
+        return false;
     }
     let context = recent_context(&ctx.db, &ctx.conv_id).await;
     // Helper: translate, logging+toasting on failure (empty on error).
@@ -389,7 +546,7 @@ async fn process_segment(
     let detected = resolve_lang_n(
         &transcript.lang,
         &transcript.text,
-        &ctx.langs,
+        langs,
         ctx.detect_foreign,
     );
     // Translate the utterance into every *other* conversation language
@@ -397,7 +554,7 @@ async fn process_segment(
     // translation; with 3+ it fans out, one row per target language
     // stored in `message_translation`.
     let mut translations: HashMap<String, String> = HashMap::new();
-    for target in &ctx.langs {
+    for target in langs {
         if target == &detected {
             continue;
         }
@@ -412,8 +569,8 @@ async fn process_segment(
     //    lang_a translation, `translated_text_b` = lang_b translation.
     //  - 3+ languages → `translated_text` = first other language; the
     //    grid UI reads `translations` instead.
-    let (translated, translated_b) = back_compat_translations(&detected, &ctx.langs, &translations);
-    let speaker = diarizer.label(&pcm, SAMPLE_RATE);
+    let (translated, translated_b) = back_compat_translations(&detected, langs, &translations);
+    let speaker = diarizer.label(pcm, SAMPLE_RATE);
     let now = now_ms();
     // Whole-pipeline latency: from the moment VAD released the
     // segment to now (STT + translation done, about to persist).
@@ -438,7 +595,7 @@ async fn process_segment(
     }
     if let Some(dir) = &ctx.audio_dir {
         let path = dir.join(format!("{}.wav", msg.id));
-        let wav = crate::audio::encode_wav_pcm16(&pcm, SAMPLE_RATE);
+        let wav = crate::audio::encode_wav_pcm16(pcm, SAMPLE_RATE);
         match std::fs::write(&path, wav) {
             Ok(()) => {
                 if let Err(e) = ctx
@@ -463,6 +620,7 @@ async fn process_segment(
     ) {
         log::error!("emit failed: {e}");
     }
+    true
 }
 
 /// Recent conversation text (last few turns) handed to the translator so it can
