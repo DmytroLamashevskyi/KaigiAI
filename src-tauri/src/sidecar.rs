@@ -15,11 +15,25 @@ use std::time::{Duration, Instant};
 pub const DEFAULT_WHISPER_PORT: u16 = 8771;
 pub const DEFAULT_LLAMA_PORT: u16 = 8770;
 
-/// How long to wait for a freshly-spawned server to start listening. Model load
-/// (esp. whisper large / big GGUF) can take a while, but if it hasn't bound the
-/// port in this window something is wrong — fail fast so the UI shows an error
-/// instead of an endless "preparing".
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(45);
+/// How long to wait for a freshly-spawned server to become ready: a base 45 s
+/// plus 15 s per GB of model file, capped at 5 min. Recent llama-server builds
+/// bind the port only AFTER the model is loaded, and loading is disk-bound —
+/// a 9 GB Qwen2.5-14B took 76 s cold, past the old fixed 45 s, so big models
+/// could never start (§10.19). Still finite, so a broken setup shows an error
+/// instead of an endless "preparing". The frontend's safety cap is above the max.
+fn startup_timeout(model_path: &str) -> Duration {
+    let gb = std::fs::metadata(model_path)
+        .map(|m| m.len() as f64 / 1e9)
+        .unwrap_or(0.0);
+    Duration::from_secs_f64((45.0 + 15.0 * gb).min(300.0))
+}
+
+/// llama-server context (tokens, shared by all slots). Without `-c` it takes
+/// the model's full training context — 32k for Qwen2.5, ~6 GB of KV cache on
+/// a 14B model, which left whisper large-v3 + Qwen 14B at 15.9 / 16 GB VRAM.
+/// The largest request we send is a meeting summary: ≤24k chars of transcript
+/// (≈9k tokens) + a 2048-token reply, so 16k is ample.
+const LLAMA_CTX: &str = "16384";
 
 #[derive(Default)]
 pub struct Sidecars {
@@ -91,10 +105,11 @@ impl Sidecars {
             return Err("Set the Whisper model path in Settings (local mode).".into());
         }
         let sig = format!("{exe}|{model}");
+        let timeout = startup_timeout(&model);
         let args = vec![
             "-m".into(), model, "--host".into(), "127.0.0.1".into(),
         ];
-        let port = self.ensure(Which::Whisper, sig, exe, args, None, DEFAULT_WHISPER_PORT)?;
+        let port = self.ensure(Which::Whisper, sig, exe, args, None, DEFAULT_WHISPER_PORT, timeout)?;
         Ok(base_url_root(port))
     }
 
@@ -111,8 +126,10 @@ impl Sidecars {
             return Err("Set the LLM model path in Settings (local mode).".into());
         }
         let sig = format!("{exe}|{model}|{ngl}");
+        let timeout = startup_timeout(&model);
         let mut args = vec![
             "-m".into(), model, "--host".into(), "127.0.0.1".into(), "-ngl".into(), ngl.to_string(),
+            "-c".into(), LLAMA_CTX.into(),
         ];
         // The host-RAM prompt cache (on by default in recent builds) costs a
         // median ~0.6 s and up to 15 s per request saving prompts we never
@@ -122,8 +139,10 @@ impl Sidecars {
         if supports_flag(&exe, "--cache-ram") {
             args.extend(["--cache-ram".into(), "0".into()]);
         }
-        // llama.cpp binds before the model loads — gate on /health (200 = ready).
-        let port = self.ensure(Which::Llama, sig, exe, args, Some("/health"), DEFAULT_LLAMA_PORT)?;
+        // Older llama.cpp builds bind before the model loads — gate on /health
+        // (200 = ready) either way.
+        let port =
+            self.ensure(Which::Llama, sig, exe, args, Some("/health"), DEFAULT_LLAMA_PORT, timeout)?;
         Ok(base_url(port))
     }
 
@@ -141,8 +160,9 @@ impl Sidecars {
         mut args: Vec<String>,
         health: Option<&'static str>,
         preferred: u16,
+        timeout: Duration,
     ) -> Result<u16, String> {
-        let deadline = Instant::now() + STARTUP_TIMEOUT;
+        let deadline = Instant::now() + timeout;
         loop {
             // Phase A — brief lock: reuse a ready server, or spawn/adopt one.
             let port = {
@@ -334,4 +354,21 @@ fn pick_port(preferred: u16) -> u16 {
         .and_then(|l| l.local_addr().ok())
         .map(|a| a.port())
         .unwrap_or(preferred)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_timeout_scales_with_model_size() {
+        // Missing file: the base timeout.
+        assert_eq!(startup_timeout("no/such/model.gguf"), Duration::from_secs(45));
+        let path = std::env::temp_dir().join(format!("kaigi_model_{}.bin", std::process::id()));
+        let f = std::fs::File::create(&path).unwrap();
+        f.set_len(2_000_000_000).unwrap(); // sparse 2 GB
+        drop(f);
+        assert_eq!(startup_timeout(path.to_str().unwrap()), Duration::from_secs(75));
+        let _ = std::fs::remove_file(&path);
+    }
 }

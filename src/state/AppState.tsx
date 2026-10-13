@@ -301,8 +301,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!recording) setPending([]);
   }, [recording]);
 
-  // Safety cap on "preparing": the backend fails a stuck server start in ~45 s
-  // per stage, but if startRecording never resolves at all, don't spin forever.
+  // Safety cap on "preparing": the backend fails a stuck server start within
+  // 45 s + 15 s/GB of model (max 5 min) per stage, but if startRecording never
+  // resolves at all, don't spin forever. Must stay above the backend's limit.
   useEffect(() => {
     if (!preparing) return;
     const id = setTimeout(() => {
@@ -310,7 +311,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setError(
         "Сервис не запустился вовремя. Проверьте пути к серверам/моделям в настройках."
       );
-    }, 120_000);
+    }, 660_000);
     return () => clearTimeout(id);
   }, [preparing]);
 
