@@ -72,10 +72,16 @@ impl ApiProvider {
         }
     }
 
-    async fn chat(&self, system: &str, user: &str) -> ProviderResult<String> {
+    /// One chat completion. `max_tokens` is a hard ceiling on the reply: small
+    /// local models occasionally loop and never emit end-of-turn (seen with
+    /// Qwen2.5-3B translating into Mongolian: 16k tokens until the client gave
+    /// up), which holds a llama-server slot — and slows every other request —
+    /// until the 90 s timeout.
+    async fn chat(&self, system: &str, user: &str, max_tokens: u32) -> ProviderResult<String> {
         let body = serde_json::json!({
             "model": self.llm_model,
             "temperature": 0.2,
+            "max_tokens": max_tokens,
             "messages": [
                 { "role": "system", "content": system },
                 { "role": "user", "content": user },
@@ -123,7 +129,7 @@ impl TranslationProvider for ApiProvider {
                  and pronouns. Do NOT translate or repeat it; use it only as context:\n{context}"
             ));
         }
-        self.chat(&system, text).await
+        self.chat(&system, text, translation_max_tokens(text)).await
     }
 
     async fn summarize(&self, transcript: &str, lang: &str) -> ProviderResult<String> {
@@ -132,7 +138,7 @@ impl TranslationProvider for ApiProvider {
              Produce concise markdown: a short overview, key points as bullets, and an \
              'Action items' list. Output only the markdown."
         );
-        self.chat(&system, transcript).await
+        self.chat(&system, transcript, 2048).await
     }
 
     async fn title(&self, transcript: &str, lang: &str) -> ProviderResult<String> {
@@ -141,7 +147,7 @@ impl TranslationProvider for ApiProvider {
              in language '{lang}'. Capture the main topic. Output ONLY the title text — no \
              quotes, no punctuation at the end, no labels."
         );
-        let raw = self.chat(&system, transcript).await?;
+        let raw = self.chat(&system, transcript, 48).await?;
         // Models sometimes wrap the title in quotes or add a trailing period.
         Ok(raw.trim().trim_matches(|c| c == '"' || c == '«' || c == '»' || c == '.').trim().to_string())
     }
@@ -224,6 +230,14 @@ impl SttProvider for ApiProvider {
     }
 }
 
+/// Reply ceiling for translating `text`. A faithful translation stays within a
+/// few tokens per source character in any script (CJK ≈ 1 token/char, Latin and
+/// Cyrillic far fewer), so 3×chars + slack never truncates a real translation
+/// but stops a runaway loop within a second or two.
+fn translation_max_tokens(text: &str) -> u32 {
+    (text.chars().count() as u32 * 3 + 64).clamp(128, 2048)
+}
+
 /// whisper.cpp's server joins its decoder segments with `\n`, and a segment
 /// boundary can fall INSIDE a word ("солн\nечная"). Each segment that starts a
 /// new word already begins with a space, so dropping the newlines restores the
@@ -276,6 +290,14 @@ fn normalize_lang(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn translation_cap_scales_with_input() {
+        assert_eq!(translation_max_tokens("Да"), 128);
+        let sentence = "Тысячи лет назад человек по имени Аристарх сказал, что Солнечная система вращается вокруг Солнца.";
+        assert_eq!(translation_max_tokens(sentence), sentence.chars().count() as u32 * 3 + 64);
+        assert_eq!(translation_max_tokens(&"слово ".repeat(1000)), 2048);
+    }
 
     #[test]
     fn whisper_cpp_segments_rejoin_mid_word() {
