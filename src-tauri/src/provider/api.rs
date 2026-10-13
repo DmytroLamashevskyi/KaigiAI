@@ -87,23 +87,35 @@ impl ApiProvider {
                 { "role": "user", "content": user },
             ],
         });
-        let mut req = self
-            .client
-            .post(format!("{}/chat/completions", self.base_url))
-            .json(&body);
-        if !self.api_key.is_empty() {
-            req = req.bearer_auth(&self.api_key);
-        }
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| format!("request failed: {e}"))?;
-
-        if !resp.status().is_success() {
+        // llama-server answers 500 "Failed to parse input" when the model emitted
+        // an invalid UTF-8 sequence it can't parse back (~1 in 360 translations
+        // with Qwen2.5-3B, §10.19). Sampling is random, so a retry usually
+        // succeeds (2 of 3 in a repro) — up to two retries for that error only.
+        let mut attempt = 0;
+        let resp = loop {
+            let mut req = self
+                .client
+                .post(format!("{}/chat/completions", self.base_url))
+                .json(&body);
+            if !self.api_key.is_empty() {
+                req = req.bearer_auth(&self.api_key);
+            }
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| format!("request failed: {e}"))?;
+            if resp.status().is_success() {
+                break resp;
+            }
             let code = resp.status();
-            let detail = short_detail(resp.text().await.unwrap_or_default());
-            return Err(format!("API error {code}: {detail}"));
-        }
+            let raw = resp.text().await.unwrap_or_default();
+            if is_retryable_parse_error(code, &raw) && attempt < 2 {
+                attempt += 1;
+                log::warn!("LLM output parse error, retrying ({attempt}/2)");
+                continue;
+            }
+            return Err(format!("API error {code}: {}", short_detail(raw)));
+        };
 
         let parsed: ChatResponse = resp.json().await.map_err(|e| format!("bad response: {e}"))?;
         parsed
@@ -230,6 +242,11 @@ impl SttProvider for ApiProvider {
     }
 }
 
+/// llama-server's 500 for a completion it generated but could not parse back.
+fn is_retryable_parse_error(code: reqwest::StatusCode, body: &str) -> bool {
+    code == reqwest::StatusCode::INTERNAL_SERVER_ERROR && body.contains("Failed to parse input")
+}
+
 /// Reply ceiling for translating `text`. A faithful translation stays within a
 /// few tokens per source character in any script (CJK ≈ 1 token/char, Latin and
 /// Cyrillic far fewer), so 3×chars + slack never truncates a real translation
@@ -320,6 +337,15 @@ mod tests {
         assert_eq!(normalize_lang("mandarin"), "zh");
         assert_eq!(normalize_lang("ru"), "ru");
         assert_eq!(normalize_lang("klingon"), "klingon");
+    }
+
+    #[test]
+    fn only_parse_errors_are_retried() {
+        let e500 = reqwest::StatusCode::INTERNAL_SERVER_ERROR;
+        let body = r#"{"error":{"code":500,"message":"Failed to parse input at pos 22: x"}}"#;
+        assert!(is_retryable_parse_error(e500, body));
+        assert!(!is_retryable_parse_error(e500, "out of memory"));
+        assert!(!is_retryable_parse_error(reqwest::StatusCode::BAD_REQUEST, body));
     }
 
     #[test]

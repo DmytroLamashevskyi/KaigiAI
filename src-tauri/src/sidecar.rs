@@ -8,7 +8,8 @@
 
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub const DEFAULT_WHISPER_PORT: u16 = 8771;
@@ -110,9 +111,17 @@ impl Sidecars {
             return Err("Set the LLM model path in Settings (local mode).".into());
         }
         let sig = format!("{exe}|{model}|{ngl}");
-        let args = vec![
+        let mut args = vec![
             "-m".into(), model, "--host".into(), "127.0.0.1".into(), "-ngl".into(), ngl.to_string(),
         ];
+        // The host-RAM prompt cache (on by default in recent builds) costs a
+        // median ~0.6 s and up to 15 s per request saving prompts we never
+        // reuse — every translation is a fresh short prompt. Disabling it cut 6
+        // parallel translations from 7.0 s to 2.1 s median (FLEURS benchmark,
+        // §10.19). Older builds reject unknown flags, so probe `--help` first.
+        if supports_flag(&exe, "--cache-ram") {
+            args.extend(["--cache-ram".into(), "0".into()]);
+        }
         // llama.cpp binds before the model loads — gate on /health (200 = ready).
         let port = self.ensure(Which::Llama, sig, exe, args, Some("/health"), DEFAULT_LLAMA_PORT)?;
         Ok(base_url(port))
@@ -259,6 +268,32 @@ fn base_url(port: u16) -> String {
 /// Server-root base URL (no `/v1`). whisper.cpp's transcription route lives here.
 fn base_url_root(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
+}
+
+/// Whether a server executable lists `flag` in its `--help`. Cached per exe
+/// (one ~0.7 s probe per path per app run); `false` if the probe fails.
+fn supports_flag(exe: &str, flag: &str) -> bool {
+    static CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
+    let help = map.entry(exe.to_string()).or_insert_with(|| {
+        let mut cmd = Command::new(exe);
+        cmd.arg("--help").stdin(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        cmd.output()
+            .map(|o| {
+                let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
+                text.push_str(&String::from_utf8_lossy(&o.stderr));
+                text
+            })
+            .unwrap_or_default()
+    });
+    help.contains(flag)
 }
 
 fn spawn(exe: &str, args: &[&str]) -> Result<Child, String> {
