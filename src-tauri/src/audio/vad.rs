@@ -27,8 +27,11 @@ pub enum VadEvent {
     /// A pending pause ended without finalizing — speech resumed, or the segment
     /// was too short and got discarded. The UI should drop its placeholder.
     PendingAborted,
-    /// A finalized utterance (mono 16 kHz), ready for STT.
-    Segment(Vec<f32>),
+    /// A finalized utterance (mono 16 kHz), ready for STT. `silence_ms` is the
+    /// trailing silence waited before it finalized (already trimmed from `pcm`):
+    /// the hangover part of the user-perceived latency (§10.16). 0 when the
+    /// segment was closed by the length cap or a flush rather than a pause.
+    Segment { pcm: Vec<f32>, silence_ms: u32 },
 }
 
 #[derive(Clone, Debug)]
@@ -214,6 +217,7 @@ impl Vad {
         // pure silence and, with a multi-second hangover, would otherwise bloat
         // the STT input and invite hallucinated tokens.
         let trim = self.silence_run.saturating_mul(FRAME_SAMPLES);
+        let silence_ms = (self.silence_run * FRAME_MS) as u32;
         let keep = self.segment.len().saturating_sub(trim);
         self.segment.truncate(keep);
         // Whether we already announced a pause for this segment (so a discard
@@ -223,7 +227,7 @@ impl Vad {
         self.state = State::Silence;
         self.reset_runs();
         if seg.len() >= self.cfg.min_segment_samples {
-            out.push(VadEvent::Segment(seg));
+            out.push(VadEvent::Segment { pcm: seg, silence_ms });
         } else if announced {
             out.push(VadEvent::PendingAborted);
         }
@@ -270,7 +274,7 @@ mod tests {
         events
             .into_iter()
             .filter_map(|e| match e {
-                VadEvent::Segment(s) => Some(s),
+                VadEvent::Segment { pcm, .. } => Some(pcm),
                 _ => None,
             })
             .collect()
@@ -341,7 +345,32 @@ mod tests {
             .filter(|e| matches!(e, VadEvent::SilenceStarted { .. }))
             .count();
         assert_eq!(started, 1, "exactly one countdown bar announced");
+        // The segment reports the hangover it waited: end_frames × 20 ms (§10.16).
+        let silence: Vec<u32> = events
+            .iter()
+            .filter_map(|e| match e {
+                VadEvent::Segment { silence_ms, .. } => Some(*silence_ms),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(silence, vec![5 * FRAME_MS as u32]);
         assert_eq!(segs(events).len(), 1, "pause past grace must finalize the utterance");
+    }
+
+    #[test]
+    fn flush_reports_no_hangover() {
+        // A segment closed by stop (no trailing pause) waited no hangover.
+        let mut vad = Vad::new(VadConfig::default());
+        let mut events = vad.push(&sine(SAMPLE_RATE as usize, 220.0, 0.3));
+        events.extend(vad.flush());
+        let silence: Vec<u32> = events
+            .iter()
+            .filter_map(|e| match e {
+                VadEvent::Segment { silence_ms, .. } => Some(*silence_ms),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(silence, vec![0]);
     }
 
     #[test]

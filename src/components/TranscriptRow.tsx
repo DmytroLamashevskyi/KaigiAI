@@ -1,8 +1,9 @@
 import { useState } from "react";
-import type { Conversation, Message } from "../types";
+import type { Conversation, Message, Timings } from "../types";
 import { conversationLangs, displaySpeaker } from "../types";
 import { languageName, LANGUAGES } from "../data/languages";
 import { useApp, MAX_LANGS } from "../state/AppState";
+import { timeTitle } from "../state/latency";
 
 interface Props {
   message: Message;
@@ -31,14 +32,23 @@ export function AddLangOffer({ conv, lang }: { conv: Conversation; lang: string 
 }
 
 /** System wall-clock time the message was recorded (HH:MM:SS, local). The full
- *  date/time shows on hover so it's clear *when* something was said. `onFlip`,
- *  when given, adds a tiny control to move the row to the other language/side
- *  (fixes a mis-detected typed message). */
-function RowTime({ createdAt, onFlip }: { createdAt: number; onFlip?: () => void }) {
-  const d = new Date(createdAt);
+ *  date/time shows on hover so it's clear *when* something was said — plus the
+ *  latency breakdown in diagnostics mode (§10.16). `onFlip`, when given, adds a
+ *  tiny control to move the row to the other language/side (fixes a
+ *  mis-detected typed message). */
+function RowTime({
+  createdAt,
+  timings,
+  onFlip,
+}: {
+  createdAt: number;
+  timings?: Timings | null;
+  onFlip?: () => void;
+}) {
+  const { settings } = useApp();
   return (
-    <div className="row-time" title={d.toLocaleString()}>
-      {d.toLocaleTimeString()}
+    <div className="row-time" title={timeTitle(createdAt, timings, settings.diagnostics)}>
+      {new Date(createdAt).toLocaleTimeString()}
       {onFlip && (
         <button
           type="button"
@@ -230,7 +240,7 @@ export default function TranscriptRow({ message, conversation }: Props) {
             conversation={conversation}
             messageId={message.id}
           />
-          <RowTime createdAt={message.createdAt} />
+          <RowTime createdAt={message.createdAt} timings={message.timings} />
           <Cell
             isOriginal={false}
             text={message.translatedTextB ?? ""}
@@ -255,6 +265,7 @@ export default function TranscriptRow({ message, conversation }: Props) {
       />
       <RowTime
         createdAt={message.createdAt}
+        timings={message.timings}
         onFlip={() => reassignMessageLang(message.id)}
       />
       <Cell

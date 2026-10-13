@@ -30,6 +30,29 @@ pub struct Conversation {
     pub updated_at: i64,
 }
 
+/// Per-stage latency of one audio utterance, in ms (docs/PROJECT.md §10.16).
+/// Stored as JSON in `message.timings`; local-only diagnostics, never sent out.
+/// User-perceived "speech ended → text shown" ≈ `hangover_ms + total_ms`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Timings {
+    /// Length of the utterance audio (for the processing / speech-time ratio).
+    pub audio_ms: i64,
+    /// Trailing silence the VAD waited before finalizing (grace + countdown);
+    /// 0 for a length-cap / flush close and for later speaker-turn parts.
+    pub hangover_ms: i64,
+    /// VAD release → processing start: waiting behind earlier segments.
+    pub queue_ms: i64,
+    /// Speaker-turn segmentation (§10.15), charged to the first part only.
+    pub segment_ms: i64,
+    /// Speech recognition.
+    pub stt_ms: i64,
+    /// Translation time per target language.
+    pub translate_ms: HashMap<String, i64>,
+    /// Whole pipeline for this row — the same span as `processing_ms`.
+    pub total_ms: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
@@ -54,6 +77,10 @@ pub struct Message {
     /// text messages and rows created before this column existed.
     #[serde(default)]
     pub processing_ms: Option<i64>,
+    /// Per-stage latency breakdown (§10.16). `None` for text messages and rows
+    /// recorded before the feature. JSON column `timings`.
+    #[serde(default)]
+    pub timings: Option<Timings>,
     /// Per-language translations (lang -> text) for the N-language mode (§10.7),
     /// loaded from `message_translation`. Empty for 2-language rows (which use
     /// translated_text/translated_text_b) and pre-feature messages. Not a column —
@@ -99,7 +126,8 @@ CREATE TABLE IF NOT EXISTS message (
   start_ms        INTEGER NOT NULL,
   end_ms          INTEGER NOT NULL,
   created_at      INTEGER NOT NULL,
-  processing_ms   INTEGER
+  processing_ms   INTEGER,
+  timings         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_message_conv ON message(conversation_id);
 
@@ -149,7 +177,7 @@ const CONV_COLS: &str =
 
 /// Message SELECT column list — see [`CONV_COLS`] for why this is shared.
 const MSG_COLS: &str = "id, conversation_id, source, detected_lang, speaker, \
-     original_text, translated_text, translated_text_b, start_ms, end_ms, created_at, processing_ms";
+     original_text, translated_text, translated_text_b, start_ms, end_ms, created_at, processing_ms, timings";
 
 /// Build a [`Conversation`] from a row, parsing the `langs` JSON column (falling
 /// back to `[lang_a, lang_b]` for older rows that predate multi-language).
@@ -190,6 +218,9 @@ fn row_to_message(row: &sqlx::sqlite::SqliteRow) -> Message {
         end_ms: row.get("end_ms"),
         created_at: row.get("created_at"),
         processing_ms: row.get("processing_ms"),
+        timings: row
+            .get::<Option<String>, _>("timings")
+            .and_then(|s| serde_json::from_str(&s).ok()),
         translations: HashMap::new(),
     }
 }
@@ -246,6 +277,8 @@ impl Db {
         self.add_column("ALTER TABLE message ADD COLUMN translated_text_b TEXT").await;
         // Speech→text pipeline latency in ms (§10.8).
         self.add_column("ALTER TABLE message ADD COLUMN processing_ms INTEGER").await;
+        // Per-stage latency JSON (§10.16).
+        self.add_column("ALTER TABLE message ADD COLUMN timings TEXT").await;
         Ok(())
     }
 
@@ -465,14 +498,15 @@ impl Db {
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO message (id, conversation_id, source, detected_lang, speaker, \
-             original_text, translated_text, translated_text_b, start_ms, end_ms, created_at, processing_ms) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             original_text, translated_text, translated_text_b, start_ms, end_ms, created_at, processing_ms, timings) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(id) DO UPDATE SET \
              detected_lang = excluded.detected_lang, \
              original_text = excluded.original_text, \
              translated_text = excluded.translated_text, \
              translated_text_b = excluded.translated_text_b, \
-             processing_ms = excluded.processing_ms",
+             processing_ms = excluded.processing_ms, \
+             timings = COALESCE(excluded.timings, message.timings)",
         )
         .bind(&m.id)
         .bind(&m.conversation_id)
@@ -486,6 +520,9 @@ impl Db {
         .bind(m.end_ms)
         .bind(m.created_at)
         .bind(m.processing_ms)
+        // Re-saves from the UI (language flip, edits) may omit timings — the
+        // COALESCE above keeps the recorded breakdown instead of erasing it.
+        .bind(m.timings.as_ref().and_then(|t| serde_json::to_string(t).ok()))
         .execute(&mut *tx)
         .await?;
         // Replace the per-language translations (§10.7). A message has at most a
@@ -601,6 +638,7 @@ mod tests {
             start_ms: 0,
             end_ms: 0,
             processing_ms: None,
+            timings: None,
             created_at: ts,
             translations: std::collections::HashMap::new(),
         }
@@ -653,6 +691,27 @@ mod tests {
             let got = listed.iter().find(|x| x.id == "m2").unwrap();
             assert_eq!(got.translations.get("ja").map(String::as_str), Some("こんにちは"));
             assert_eq!(got.translations.get("en").map(String::as_str), Some("Hi"));
+
+            // Latency breakdown (§10.16) roundtrips, and a re-save without
+            // timings (UI language flip / edit) keeps the recorded breakdown.
+            let mut m3 = msg("m3", "c1", 260);
+            let t = Timings {
+                audio_ms: 2400,
+                hangover_ms: 4500,
+                stt_ms: 310,
+                translate_ms: HashMap::from([("en".to_string(), 420)]),
+                total_ms: 760,
+                ..Timings::default()
+            };
+            m3.timings = Some(t.clone());
+            db.add_message(&m3).await.unwrap();
+            m3.timings = None;
+            m3.translated_text = "Hello!".into();
+            db.add_message(&m3).await.unwrap();
+            let listed = db.list_messages("c1").await.unwrap();
+            let got = listed.iter().find(|x| x.id == "m3").unwrap();
+            assert_eq!(got.translated_text, "Hello!");
+            assert_eq!(got.timings.as_ref(), Some(&t));
 
             db.set_languages("c1", &["ru".into(), "ja".into(), "en".into()], 500)
                 .await

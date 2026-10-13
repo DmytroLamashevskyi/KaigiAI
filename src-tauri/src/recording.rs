@@ -18,7 +18,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::audio::{AudioCapture, AudioSource, VadConfig, VadEvent, SAMPLE_RATE};
-use crate::db::{Conversation, Db, Message};
+use crate::db::{Conversation, Db, Message, Timings};
 use crate::provider;
 
 /// Event name for non-fatal recording failures surfaced to the UI as a toast.
@@ -241,12 +241,8 @@ impl Recorder {
             let _ = std::fs::create_dir_all(dir);
         }
 
-        // Worker -> async processor: one PCM segment per utterance, tagged with
-        // its end offset (ms since session start) so transcript rows carry a real
-        // timeline instead of zeros, plus a monotonic `pending_id` and the
-        // `Instant` it left the VAD so the processor can drive the §10.8 latency
-        // placeholder and stamp `processing_ms`.
-        let (seg_tx, mut seg_rx) = unbounded_channel::<(Vec<f32>, i64, u64, Instant)>();
+        // Worker -> async processor: one finalized utterance per message.
+        let (seg_tx, mut seg_rx) = unbounded_channel::<VadSegment>();
 
         // STT + translation pipeline runs on the async runtime.
         let ctx = PipelineCtx {
@@ -269,17 +265,8 @@ impl Recorder {
         let ctl_app = app;
         let ctl_conv_id = conv_id;
         tauri::async_runtime::spawn(async move {
-            while let Some((pcm, end_ms, pending_id, emitted_at)) = seg_rx.recv().await {
-                process_segment(
-                    &ctx,
-                    &mut diarizer,
-                    &mut segmenter,
-                    pcm,
-                    end_ms,
-                    pending_id,
-                    emitted_at,
-                )
-                .await;
+            while let Some(seg) = seg_rx.recv().await {
+                process_segment(&ctx, &mut diarizer, &mut segmenter, seg).await;
             }
         });
 
@@ -325,7 +312,7 @@ impl Recorder {
                                 .emit(SEGMENT_CANCELLED_EVENT, SegmentCancelled { pending_id: id });
                         }
                     }
-                    VadEvent::Segment(seg) => {
+                    VadEvent::Segment { pcm, silence_ms } => {
                         // Reuse the silence bar's id if this close followed a pause;
                         // a cap/flush close has none, so allocate a fresh one.
                         let pending_id = current_silence_id.take().unwrap_or_else(|| {
@@ -333,7 +320,13 @@ impl Recorder {
                             next_pending
                         });
                         let end_ms = session_start.elapsed().as_millis() as i64;
-                        let _ = seg_tx.send((seg, end_ms, pending_id, Instant::now()));
+                        let _ = seg_tx.send(VadSegment {
+                            pcm,
+                            end_ms,
+                            pending_id,
+                            emitted_at: Instant::now(),
+                            silence_ms,
+                        });
                     }
                 },
             );
@@ -371,15 +364,34 @@ impl Recorder {
 /// changes (§10.15), and runs each part as its own utterance. The placeholder
 /// is resolved by the first part's `transcript-message`; if NO part produced a
 /// message (all noise / STT failed / conversation deleted), it is cancelled.
+/// One finalized utterance handed from the VAD worker to the async pipeline.
+struct VadSegment {
+    pcm: Vec<f32>,
+    /// End offset (ms since session start), so rows carry a real timeline.
+    end_ms: i64,
+    /// Monotonic id of the §10.8 placeholder this segment resolves.
+    pending_id: u64,
+    /// When it left the VAD: baseline for `processing_ms` and `queue_ms`.
+    emitted_at: Instant,
+    /// Trailing silence waited before finalizing (§10.16 `hangover_ms`).
+    silence_ms: u32,
+}
+
 async fn process_segment(
     ctx: &PipelineCtx,
     diarizer: &mut Box<dyn provider::diarize::Diarizer>,
     segmenter: &mut Option<provider::segment::OnnxSegmenter>,
-    pcm: Vec<f32>,
-    end_ms: i64,
-    pending_id: u64,
-    emitted_at: Instant,
+    seg: VadSegment,
 ) {
+    let VadSegment {
+        pcm,
+        end_ms,
+        pending_id,
+        emitted_at,
+        silence_ms,
+    } = seg;
+    // Time spent queued behind earlier segments (the pipeline is sequential).
+    let queue_ms = emitted_at.elapsed().as_millis() as i64;
     let dur_ms = (pcm.len() as f64 / SAMPLE_RATE as f64 * 1000.0) as i64;
     let seg_start_ms = (end_ms - dur_ms).max(0);
     // The segment finalized: swap the UI's silence-countdown bar for a
@@ -406,6 +418,7 @@ async fn process_segment(
     // segmenter the segment is processed whole, exactly as before. The ONNX
     // inference is CPU-bound (~0.1–1 s for a long segment), so it hops to a
     // blocking thread instead of stalling the shared async runtime.
+    let segment_started = Instant::now();
     let (cuts, pcm) = match segmenter.take() {
         Some(mut s) => {
             match tauri::async_runtime::spawn_blocking(move || {
@@ -431,6 +444,7 @@ async fn process_segment(
         }
         None => (Vec::new(), pcm),
     };
+    let segment_ms = segment_started.elapsed().as_millis() as i64;
     if !cuts.is_empty() {
         // Diagnosability: when phrases look truncated in the transcript, the log
         // shows whether (and where) the segmenter cut them.
@@ -456,6 +470,14 @@ async fn process_segment(
     // §10.8 meaning); later parts from the previous part's finish, so each row
     // reports its own incremental wait rather than a cumulative sum.
     let mut part_started = emitted_at;
+    // Hangover, queueing and segmentation happened once for the whole segment:
+    // charge them to the first part; later parts only carry their own stages.
+    let mut carry = Timings {
+        hangover_ms: silence_ms as i64,
+        queue_ms,
+        segment_ms,
+        ..Timings::default()
+    };
     let last = bounds.len().saturating_sub(2);
     for (i, pair) in bounds.windows(2).enumerate() {
         let (a, b) = (pair[0], pair[1]);
@@ -471,6 +493,7 @@ async fn process_segment(
             ms_of(b),
             pending_id,
             part_started,
+            std::mem::take(&mut carry),
         )
         .await;
         part_started = Instant::now();
@@ -508,9 +531,14 @@ async fn process_utterance(
     end_ms: i64,
     pending_id: u64,
     emitted_at: Instant,
+    // Stage timings measured upstream (hangover / queue / segmentation, §10.16);
+    // this function fills in the rest.
+    mut timings: Timings,
 ) -> bool {
     let dur_ms = end_ms - start_ms;
+    timings.audio_ms = dur_ms;
     // The conversation languages double as whisper's decoding hint.
+    let stt_started = Instant::now();
     let transcript = match ctx.stt.transcribe(pcm, SAMPLE_RATE, langs).await {
         Ok(t) => t,
         Err(e) => {
@@ -519,6 +547,7 @@ async fn process_utterance(
             return false;
         }
     };
+    timings.stt_ms = stt_started.elapsed().as_millis() as i64;
     if transcript.text.is_empty() || is_noise(&transcript.text) {
         return false;
     }
@@ -558,7 +587,11 @@ async fn process_utterance(
         if target == &detected {
             continue;
         }
+        let started = Instant::now();
         let t = do_translate(detected.clone(), target.clone()).await;
+        timings
+            .translate_ms
+            .insert(target.clone(), started.elapsed().as_millis() as i64);
         if !t.is_empty() {
             translations.insert(target.clone(), t);
         }
@@ -575,6 +608,8 @@ async fn process_utterance(
     // Whole-pipeline latency: from the moment VAD released the
     // segment to now (STT + translation done, about to persist).
     let processing_ms = emitted_at.elapsed().as_millis() as i64;
+    timings.total_ms = processing_ms;
+    log::info!("latency: {}", latency_line(&timings));
     let msg = Message {
         id: next_id(),
         conversation_id: ctx.conv_id.clone(),
@@ -588,6 +623,7 @@ async fn process_utterance(
         end_ms,
         created_at: now,
         processing_ms: Some(processing_ms),
+        timings: Some(timings),
         translations,
     };
     if let Err(e) = ctx.db.add_message(&msg).await {
@@ -621,6 +657,19 @@ async fn process_utterance(
         log::error!("emit failed: {e}");
     }
     true
+}
+
+/// One-line latency summary for the log (§10.16), e.g.
+/// `audio=2400 hangover=4500 queue=0 seg=35 stt=310 tr[en]=420 total=780` —
+/// the format users paste into issues. Languages sorted for stable output.
+fn latency_line(t: &Timings) -> String {
+    let mut tr: Vec<_> = t.translate_ms.iter().collect();
+    tr.sort();
+    let tr: String = tr.iter().map(|(l, ms)| format!(" tr[{l}]={ms}")).collect();
+    format!(
+        "audio={} hangover={} queue={} seg={} stt={}{tr} total={}",
+        t.audio_ms, t.hangover_ms, t.queue_ms, t.segment_ms, t.stt_ms, t.total_ms
+    )
 }
 
 /// Recent conversation text (last few turns) handed to the translator so it can
@@ -903,6 +952,23 @@ fn next_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn latency_line_is_stable() {
+        let t = Timings {
+            audio_ms: 2400,
+            hangover_ms: 4500,
+            segment_ms: 35,
+            stt_ms: 310,
+            translate_ms: HashMap::from([("ja".into(), 500), ("en".into(), 420)]),
+            total_ms: 1265,
+            ..Timings::default()
+        };
+        assert_eq!(
+            latency_line(&t),
+            "audio=2400 hangover=4500 queue=0 seg=35 stt=310 tr[en]=420 tr[ja]=500 total=1265"
+        );
+    }
 
     #[test]
     fn filler_only_segments_are_noise() {

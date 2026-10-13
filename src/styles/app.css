@@ -874,6 +874,34 @@
   max-width: 100%;
   accent-color: var(--accent);
 }
+/* Diagnostics latency summary (§10.16). */
+.latency-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0 8px;
+}
+.latency-table {
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  max-width: 420px;
+}
+.latency-table th,
+.latency-table td {
+  padding: 4px 12px 4px 0;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.latency-table th {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.latency-table td + td,
+.latency-table th + th {
+  text-align: right;
+}
+
 .slider-value {
   font-size: 13px;
   color: var(--text-muted);

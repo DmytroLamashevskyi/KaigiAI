@@ -32,6 +32,28 @@ export interface Message {
   /** Speech→text pipeline latency in ms (STT + translation), §10.8. Absent for
    *  text messages and rows created before the feature existed. */
   processingMs?: number | null;
+  /** Per-stage latency breakdown (§10.16). Absent for text messages and rows
+   *  recorded before the feature. */
+  timings?: Timings | null;
+}
+
+/** Per-stage latency of one audio utterance in ms (docs/PROJECT.md §10.16).
+ *  User-perceived "speech ended → text shown" ≈ hangoverMs + totalMs. */
+export interface Timings {
+  /** Utterance audio length. */
+  audioMs: number;
+  /** Silence waited before the utterance finalized (grace + countdown). */
+  hangoverMs: number;
+  /** Waiting behind earlier utterances in the pipeline. */
+  queueMs: number;
+  /** Speaker-turn segmentation (§10.15). */
+  segmentMs: number;
+  /** Speech recognition. */
+  sttMs: number;
+  /** Translation time per target language. */
+  translateMs: Record<string, number>;
+  /** Whole pipeline (VAD release → message ready) = processingMs. */
+  totalMs: number;
 }
 
 /** A placeholder row in the transcript while an utterance settles (§10.8).
@@ -161,6 +183,9 @@ export interface Settings {
   /** Folder where ZIP exports are written (empty → a default under app data). */
   exportDir: string;
   saveAudio: boolean;
+  /** Diagnostics mode (§10.16): latency breakdown on message-time hover and a
+   *  per-conversation latency summary in Settings. */
+  diagnostics: boolean;
   fontSize: FontSize;
   theme: "light" | "dark";
   /** Set once the first-run setup wizard has been completed/dismissed, so it

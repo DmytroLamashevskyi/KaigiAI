@@ -6,6 +6,7 @@ import { conversationLangs, textForLang } from "../types";
 import { languageName, LANGUAGES } from "../data/languages";
 import { isRtl } from "../i18n";
 import { useAutoScroll } from "../hooks/useAutoScroll";
+import { timeTitle } from "../state/latency";
 import { useT } from "../i18n/useT";
 import { AddLangOffer, SpeakerBadge } from "./TranscriptRow";
 import PendingRow, { TranscriptEmpty } from "./PendingRow";
@@ -24,6 +25,7 @@ export default function TranscriptGrid({ conversation }: { conversation: Convers
     setLanguages,
     setMessageLang,
     translatingIds,
+    settings,
   } = useApp();
   const t = useT();
   const bodyRef = useAutoScroll<HTMLDivElement>([
@@ -129,7 +131,7 @@ export default function TranscriptGrid({ conversation }: { conversation: Convers
               return (
                 <div className="grid-msg" key={m.id}>
                   <div className="grid-msg-meta">
-                    <span title={new Date(m.createdAt).toLocaleString()}>
+                    <span title={timeTitle(m.createdAt, m.timings, settings.diagnostics)}>
                       {new Date(m.createdAt).toLocaleTimeString()}
                     </span>
                     {m.speaker && (

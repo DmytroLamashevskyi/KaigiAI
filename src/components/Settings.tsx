@@ -4,6 +4,7 @@ import AppearanceSection from "./settings/AppearanceSection";
 import LanguagesSection from "./settings/LanguagesSection";
 import ProviderSection from "./settings/ProviderSection";
 import AudioSection from "./settings/AudioSection";
+import DiagnosticsSection from "./settings/DiagnosticsSection";
 
 /** Settings screen shell — composes the section components, each of which reads
  *  `settings`/`updateSettings` from the app context directly. */
@@ -32,6 +33,7 @@ export default function Settings() {
         <LanguagesSection />
         <ProviderSection />
         <AudioSection />
+        <DiagnosticsSection />
       </div>
     </div>
   );

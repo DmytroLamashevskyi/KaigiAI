@@ -62,6 +62,7 @@ const DEFAULT_SETTINGS: Settings = {
   detectForeignLanguages: false,
   exportDir: "",
   saveAudio: false,
+  diagnostics: false,
   fontSize: "medium",
   theme: "light",
   onboarded: false,
