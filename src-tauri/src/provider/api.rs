@@ -260,36 +260,67 @@ fn short_detail(body: String) -> String {
     }
 }
 
-/// Whisper APIs may return the language as a full word ("english") or an ISO
-/// code ("en"). Map the common spellings to ISO codes; anything else passes
-/// through unchanged — `resolve_lang_n` in recording.rs does the real snapping
-/// onto the conversation languages downstream.
+/// Whisper's language names → ISO 639-1 codes (whisper's own table, with
+/// `jw` corrected to ISO `jv`). whisper.cpp reports the detected language as
+/// the full name ("mongolian"), cloud APIs often as the code.
+const WHISPER_LANGS: &[(&str, &str)] = &[
+    ("english", "en"), ("chinese", "zh"), ("german", "de"), ("spanish", "es"),
+    ("russian", "ru"), ("korean", "ko"), ("french", "fr"), ("japanese", "ja"),
+    ("portuguese", "pt"), ("turkish", "tr"), ("polish", "pl"), ("catalan", "ca"),
+    ("dutch", "nl"), ("arabic", "ar"), ("swedish", "sv"), ("italian", "it"),
+    ("indonesian", "id"), ("hindi", "hi"), ("finnish", "fi"), ("vietnamese", "vi"),
+    ("hebrew", "he"), ("ukrainian", "uk"), ("greek", "el"), ("malay", "ms"),
+    ("czech", "cs"), ("romanian", "ro"), ("danish", "da"), ("hungarian", "hu"),
+    ("tamil", "ta"), ("norwegian", "no"), ("thai", "th"), ("urdu", "ur"),
+    ("croatian", "hr"), ("bulgarian", "bg"), ("lithuanian", "lt"), ("latin", "la"),
+    ("maori", "mi"), ("malayalam", "ml"), ("welsh", "cy"), ("slovak", "sk"),
+    ("telugu", "te"), ("persian", "fa"), ("latvian", "lv"), ("bengali", "bn"),
+    ("serbian", "sr"), ("azerbaijani", "az"), ("slovenian", "sl"), ("kannada", "kn"),
+    ("estonian", "et"), ("macedonian", "mk"), ("breton", "br"), ("basque", "eu"),
+    ("icelandic", "is"), ("armenian", "hy"), ("nepali", "ne"), ("mongolian", "mn"),
+    ("bosnian", "bs"), ("kazakh", "kk"), ("albanian", "sq"), ("swahili", "sw"),
+    ("galician", "gl"), ("marathi", "mr"), ("punjabi", "pa"), ("sinhala", "si"),
+    ("khmer", "km"), ("shona", "sn"), ("yoruba", "yo"), ("somali", "so"),
+    ("afrikaans", "af"), ("occitan", "oc"), ("georgian", "ka"), ("belarusian", "be"),
+    ("tajik", "tg"), ("sindhi", "sd"), ("gujarati", "gu"), ("amharic", "am"),
+    ("yiddish", "yi"), ("lao", "lo"), ("uzbek", "uz"), ("faroese", "fo"),
+    ("haitian creole", "ht"), ("pashto", "ps"), ("turkmen", "tk"), ("nynorsk", "nn"),
+    ("maltese", "mt"), ("sanskrit", "sa"), ("luxembourgish", "lb"), ("myanmar", "my"),
+    ("tibetan", "bo"), ("tagalog", "tl"), ("malagasy", "mg"), ("assamese", "as"),
+    ("tatar", "tt"), ("hawaiian", "haw"), ("lingala", "ln"), ("hausa", "ha"),
+    ("bashkir", "ba"), ("javanese", "jv"), ("sundanese", "su"), ("cantonese", "yue"),
+    // Aliases seen from cloud providers.
+    ("mandarin", "zh"), ("jw", "jv"),
+];
+
+/// Map a provider's language label to an ISO code: a full whisper name or an
+/// alias is looked up, a code passes through. Anything unknown passes through
+/// unchanged — `resolve_lang_n` in recording.rs does the real snapping onto the
+/// conversation languages downstream. Before the full table only 15 names were
+/// known, so e.g. Mongolian came back as "mongolian" and never matched "mn"
+/// (found by the FLEURS benchmark, §10.19).
 fn normalize_lang(raw: &str) -> String {
     let l = raw.trim().to_lowercase();
-    let code = match l.as_str() {
-        "en" | "english" => "en",
-        "ru" | "russian" => "ru",
-        "ja" | "japanese" => "ja",
-        "zh" | "chinese" | "mandarin" => "zh",
-        "es" | "spanish" => "es",
-        "fr" | "french" => "fr",
-        "de" | "german" => "de",
-        "it" | "italian" => "it",
-        "pt" | "portuguese" => "pt",
-        "ko" | "korean" => "ko",
-        "uk" | "ukrainian" => "uk",
-        "pl" | "polish" => "pl",
-        "tr" | "turkish" => "tr",
-        "id" | "indonesian" => "id",
-        "ar" | "arabic" => "ar",
-        other => other,
-    };
-    code.to_string()
+    WHISPER_LANGS
+        .iter()
+        .find(|(name, _)| *name == l)
+        .map(|(_, code)| (*code).to_string())
+        .unwrap_or(l)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn language_names_map_to_iso() {
+        assert_eq!(normalize_lang("Mongolian"), "mn");
+        assert_eq!(normalize_lang("javanese"), "jv");
+        assert_eq!(normalize_lang("haitian creole"), "ht");
+        assert_eq!(normalize_lang("mandarin"), "zh");
+        assert_eq!(normalize_lang("ru"), "ru");
+        assert_eq!(normalize_lang("klingon"), "klingon");
+    }
 
     #[test]
     fn translation_cap_scales_with_input() {
