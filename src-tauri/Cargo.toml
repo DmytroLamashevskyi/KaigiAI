@@ -1,10 +1,10 @@
 [package]
 name = "app"
-version = "0.1.3"
-description = "A Tauri App"
-authors = ["you"]
-license = ""
-repository = ""
+version = "0.1.4"
+description = "KaigiAI - local offline real-time multilingual speech translation"
+authors = ["Dmytro Lamashevskyi"]
+license = "MIT"
+repository = "https://github.com/DmytroLamashevskyi/KaigiAI"
 edition = "2021"
 rust-version = "1.77.2"
 

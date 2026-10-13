@@ -1,0 +1,39 @@
+name: Ошибка
+description: Что-то работает не так
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Что произошло
+      description: Что делали, что ожидали, что получили.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Версия KaigiAI
+      placeholder: "0.1.3"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Режим
+      options:
+        - Локально (whisper.cpp + llama.cpp)
+        - Локальное распознавание + API-перевод
+        - Полностью API
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Железо и модели
+      description: GPU / CPU, модель Whisper, модель LLM (или API-провайдер).
+  - type: textarea
+    id: log
+    attributes:
+      label: Лог
+      description: "Фрагмент kaigi.log (папка логов приложения). Уберите ключи и личные данные."
+      render: text

@@ -1,0 +1,15 @@
+name: Идея / пожелание
+description: Предложить функцию
+labels: [enhancement]
+body:
+  - type: textarea
+    id: scenario
+    attributes:
+      label: Сценарий
+      description: Какую задачу хотите решить (кто, где, на какой встрече)?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Как это могло бы работать

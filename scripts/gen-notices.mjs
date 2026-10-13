@@ -1,0 +1,141 @@
+// Generates THIRD-PARTY-NOTICES.md: every third-party crate / npm package that ends
+// up in the shipped app, with its license and (when the package has one) the full
+// license text. Run before a release: `npm run notices`.
+//
+// Rust: normal (non-dev, non-build) dependencies reachable from the app crate on
+// the Windows target, via `cargo metadata`. npm: production `dependencies` of
+// package.json, walked recursively through node_modules.
+
+import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const TARGET = "x86_64-pc-windows-msvc";
+const LICENSE_FILE = /^(licen[cs]e|copying|notice)([-_.].*)?$/i;
+
+function licenseTexts(dir) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => LICENSE_FILE.test(f))
+    .sort()
+    .map((f) => readFileSync(join(dir, f), "utf8").trim());
+}
+
+function rustPackages() {
+  const meta = JSON.parse(
+    execFileSync(
+      "cargo",
+      ["metadata", "--format-version", "1", "--filter-platform", TARGET,
+       "--manifest-path", join(root, "src-tauri", "Cargo.toml")],
+      { maxBuffer: 256 * 1024 * 1024, encoding: "utf8" },
+    ),
+  );
+  const byId = new Map(meta.packages.map((p) => [p.id, p]));
+  const nodes = new Map(meta.resolve.nodes.map((n) => [n.id, n]));
+  const rootId = meta.resolve.root;
+  const seen = new Set();
+  const stack = [rootId];
+  while (stack.length) {
+    const id = stack.pop();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    for (const dep of nodes.get(id)?.deps ?? []) {
+      // Only dependencies linked into the binary (kind null = normal).
+      if (dep.dep_kinds.some((k) => k.kind === null)) stack.push(dep.pkg);
+    }
+  }
+  seen.delete(rootId);
+  return [...seen].map((id) => {
+    const p = byId.get(id);
+    return {
+      name: p.name,
+      version: p.version,
+      license: p.license ?? (p.license_file ? "see license file" : "UNKNOWN"),
+      url: p.repository ?? p.homepage ?? `https://crates.io/crates/${p.name}`,
+      texts: licenseTexts(dirname(p.manifest_path)),
+    };
+  });
+}
+
+function npmPackages() {
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  const out = new Map();
+  const stack = Object.keys(pkg.dependencies ?? {});
+  while (stack.length) {
+    const name = stack.pop();
+    if (out.has(name)) continue;
+    const dir = join(root, "node_modules", name);
+    const manifest = join(dir, "package.json");
+    if (!existsSync(manifest)) continue;
+    const p = JSON.parse(readFileSync(manifest, "utf8"));
+    const repo = typeof p.repository === "string" ? p.repository : p.repository?.url;
+    out.set(name, {
+      name,
+      version: p.version,
+      license: typeof p.license === "string" ? p.license : p.license?.type ?? "UNKNOWN",
+      url: repo ?? `https://www.npmjs.com/package/${name}`,
+      texts: licenseTexts(dir),
+    });
+    stack.push(...Object.keys(p.dependencies ?? {}));
+  }
+  return [...out.values()];
+}
+
+// Many packages ship byte-identical license files (the stock MIT / Apache-2.0
+// texts), so each distinct text is printed once and packages reference it by number.
+const textIds = new Map();
+function textRef(t) {
+  const norm = t.replace(/\r\n/g, "\n");
+  if (!textIds.has(norm)) textIds.set(norm, { n: textIds.size + 1, users: [] });
+  return textIds.get(norm);
+}
+
+function section(title, pkgs) {
+  pkgs.sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
+  const lines = [`## ${title} (${pkgs.length})`, "", "| Package | Version | License | Texts |", "| --- | --- | --- | --- |"];
+  for (const p of pkgs) {
+    const refs = p.texts.map((t) => {
+      const r = textRef(t);
+      r.users.push(`${p.name} ${p.version}`);
+      return `[${r.n}](#text-${r.n})`;
+    });
+    lines.push(`| [${p.name}](${p.url}) | ${p.version} | ${p.license} | ${refs.join(" ") || "—"} |`);
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+function textsSection() {
+  const lines = ["## License texts", ""];
+  for (const [t, { n, users }] of textIds) {
+    lines.push(`<a id="text-${n}"></a>`, `### Text ${n}`, "", `Used by: ${users.join(", ")}`, "", "```text", t, "```", "");
+  }
+  return lines.join("\n");
+}
+
+const rust = rustPackages();
+const npm = npmPackages();
+const unknown = [...rust, ...npm].filter((p) => p.license === "UNKNOWN");
+
+const doc = [
+  "# Third-party notices",
+  "",
+  "KaigiAI is distributed under the MIT License (see LICENSE). It includes the",
+  "third-party software listed below, each under its own license. Model weights",
+  "and the whisper.cpp / llama.cpp server binaries are not distributed with the",
+  "app — the user downloads them separately under their own licenses.",
+  "",
+  "_Generated by `scripts/gen-notices.mjs`; do not edit by hand._",
+  "",
+  section("Rust crates", rust),
+  section("npm packages", npm),
+  textsSection(),
+].join("\n");
+
+writeFileSync(join(root, "THIRD-PARTY-NOTICES.md"), doc);
+console.log(`THIRD-PARTY-NOTICES.md: ${rust.length} crates, ${npm.length} npm packages`);
+if (unknown.length) {
+  console.warn(`License UNKNOWN for: ${unknown.map((p) => `${p.name}@${p.version}`).join(", ")}`);
+}
