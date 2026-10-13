@@ -142,3 +142,5 @@ llama-архив и `cudart`-архив распакуйте в **одну об�
 [MIT](LICENSE) © 2026 Dmytro Lamashevskyi. Веса моделей не распространяются — их
 скачивает пользователь; дефолтные модели выбраны с пермиссивной лицензией
 (Apache-2.0). Подробнее — [docs/PROJECT.md](docs/PROJECT.md) §4.
+Лицензии сторонних библиотек — в [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
+(генерируется `npm run notices`). История версий — [CHANGELOG.md](CHANGELOG.md).

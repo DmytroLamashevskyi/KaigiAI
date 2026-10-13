@@ -1,0 +1,25 @@
+name: Качество перевода / распознавания
+description: Плохой перевод или распознавание на конкретной языковой паре
+labels: [quality]
+body:
+  - type: input
+    id: pair
+    attributes:
+      label: Языковая пара
+      placeholder: "ru → zh"
+    validations:
+      required: true
+  - type: input
+    id: models
+    attributes:
+      label: Модели
+      placeholder: "Whisper medium + Qwen2.5-3B Q5 / Groq llama-3.3-70b"
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Пример
+      description: Что было сказано, что распознано, что переведено, как должно быть. Без конфиденциальных данных.
+    validations:
+      required: true

@@ -1,0 +1,54 @@
+# Builds the portable KaigiAI.exe when a vX.Y.Z tag is pushed (tags live on main)
+# and attaches it to a *draft* GitHub release — review the notes, then publish.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build portable exe
+        run: npm run tauri build -- --no-bundle
+
+      - name: Collect release files
+        shell: bash
+        run: |
+          mkdir out
+          cp src-tauri/target/release/app.exe out/KaigiAI.exe
+          npm run notices
+          cp LICENSE THIRD-PARTY-NOTICES.md out/
+          (cd out && sha256sum KaigiAI.exe > KaigiAI.exe.sha256)
+
+      # TODO(v0.1.4): sign out/KaigiAI.exe here once the signing provider is chosen
+      # (docs/ROADMAP.md, question 1).
+
+      - name: Create draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" out/* \
+            --draft --title "KaigiAI $GITHUB_REF_NAME" \
+            --notes "См. [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)."
