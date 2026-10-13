@@ -72,13 +72,29 @@ impl ApiProvider {
         }
     }
 
+    /// Whether this provider talks to the on-device whisper.cpp / llama.cpp
+    /// sidecars (built with the whisper.cpp `/inference` route) rather than a
+    /// cloud OpenAI-compatible API.
+    fn is_local(&self) -> bool {
+        self.stt_endpoint == "inference"
+    }
+
     /// One chat completion. `max_tokens` is a hard ceiling on the reply: small
     /// local models occasionally loop and never emit end-of-turn (seen with
     /// Qwen2.5-3B translating into Mongolian: 16k tokens until the client gave
     /// up), which holds a llama-server slot — and slows every other request —
     /// until the 90 s timeout.
-    async fn chat(&self, system: &str, user: &str, max_tokens: u32) -> ProviderResult<String> {
-        let body = serde_json::json!({
+    ///
+    /// `grammar` (GBNF) constrains the output; only llama-server understands
+    /// it, so callers pass one only for the local server ([`Self::is_local`]).
+    async fn chat(
+        &self,
+        system: &str,
+        user: &str,
+        max_tokens: u32,
+        grammar: Option<&str>,
+    ) -> ProviderResult<String> {
+        let mut body = serde_json::json!({
             "model": self.llm_model,
             "temperature": 0.2,
             "max_tokens": max_tokens,
@@ -87,6 +103,9 @@ impl ApiProvider {
                 { "role": "user", "content": user },
             ],
         });
+        if let Some(g) = grammar {
+            body["grammar"] = serde_json::Value::String(g.to_string());
+        }
         // llama-server answers 500 "Failed to parse input" when the model emitted
         // an invalid UTF-8 sequence it can't parse back (~1 in 360 translations
         // with Qwen2.5-3B, §10.19). Sampling is random, so a retry usually
@@ -130,9 +149,12 @@ impl ApiProvider {
 #[async_trait]
 impl TranslationProvider for ApiProvider {
     async fn translate(&self, text: &str, from: &str, to: &str, context: &str) -> ProviderResult<String> {
+        // Full language names, not ISO codes: small models follow "Russian" far
+        // better than 'ru' (§10.19).
+        let (from_name, to_name) = (language_name(from), language_name(to));
         let mut system = format!(
             "You are a professional translator. Translate the user's message from \
-             language '{from}' to language '{to}'. Preserve meaning, tone and register. \
+             {from_name} to {to_name}. Preserve meaning, tone and register. \
              Output ONLY the translation, with no quotes, labels or explanations."
         );
         if !context.is_empty() {
@@ -141,7 +163,28 @@ impl TranslationProvider for ApiProvider {
                  and pronouns. Do NOT translate or repeat it; use it only as context:\n{context}"
             ));
         }
-        self.chat(&system, text, translation_max_tokens(text)).await
+        let max_tokens = translation_max_tokens(text);
+        // Small models (Qwen2.5-3B) drift into Chinese mid-sentence: CJK
+        // characters showed up in ~25% of translations into Russian in the
+        // FLEURS benchmark, and neither the prompt nor a retry fixes it — the
+        // model consistently prefers Chinese there. On the local llama-server a
+        // grammar forbids those characters outright for targets written without
+        // them; cloud APIs don't take a grammar, so they get one retry with an
+        // explicit instruction instead (keeping whichever answer is cleaner).
+        let grammar = (!writes_cjk(to) && self.is_local()).then_some(NO_CJK_GRAMMAR);
+        let out = self.chat(&system, text, max_tokens, grammar).await?;
+        if writes_cjk(to) || cjk_count(&out) == 0 {
+            return Ok(out);
+        }
+        log::warn!("translation to {to} contains CJK characters, retrying");
+        system.push_str(&format!(
+            "\n\nWrite the translation entirely in {to_name}. Do not use any Chinese, \
+             Japanese or Korean characters; transliterate names into {to_name}."
+        ));
+        match self.chat(&system, text, max_tokens, None).await {
+            Ok(retry) if cjk_count(&retry) < cjk_count(&out) => Ok(retry),
+            _ => Ok(out),
+        }
     }
 
     async fn summarize(&self, transcript: &str, lang: &str) -> ProviderResult<String> {
@@ -150,7 +193,7 @@ impl TranslationProvider for ApiProvider {
              Produce concise markdown: a short overview, key points as bullets, and an \
              'Action items' list. Output only the markdown."
         );
-        self.chat(&system, transcript, 2048).await
+        self.chat(&system, transcript, 2048, None).await
     }
 
     async fn title(&self, transcript: &str, lang: &str) -> ProviderResult<String> {
@@ -159,7 +202,7 @@ impl TranslationProvider for ApiProvider {
              in language '{lang}'. Capture the main topic. Output ONLY the title text — no \
              quotes, no punctuation at the end, no labels."
         );
-        let raw = self.chat(&system, transcript, 48).await?;
+        let raw = self.chat(&system, transcript, 48, None).await?;
         // Models sometimes wrap the title in quotes or add a trailing period.
         Ok(raw.trim().trim_matches(|c| c == '"' || c == '«' || c == '»' || c == '.').trim().to_string())
     }
@@ -240,6 +283,44 @@ impl SttProvider for ApiProvider {
             lang,
         })
     }
+}
+
+/// English name for an ISO code ("ru" → "Russian") from [`WHISPER_LANGS`];
+/// unknown codes pass through unchanged.
+fn language_name(code: &str) -> String {
+    WHISPER_LANGS
+        .iter()
+        .find(|(_, c)| *c == code)
+        .map(|(name, _)| {
+            let mut ch = name.chars();
+            ch.next()
+                .map(|f| f.to_uppercase().chain(ch).collect())
+                .unwrap_or_default()
+        })
+        .unwrap_or_else(|| code.to_string())
+}
+
+/// GBNF for llama-server: any text without kana, CJK ideographs, hangul, CJK
+/// punctuation (、。「」) or full-width forms (，！). Used for translations into
+/// languages not written with them.
+const NO_CJK_GRAMMAR: &str =
+    r"root ::= [^　-ヿ㐀-鿿가-힯＀-￯]*";
+
+/// Languages normally written with Han / kana / hangul.
+fn writes_cjk(lang: &str) -> bool {
+    matches!(lang, "ja" | "zh" | "ko" | "yue")
+}
+
+/// Number of Han, kana and hangul characters in `text`.
+pub fn cjk_count(text: &str) -> usize {
+    text.chars()
+        .filter(|c| {
+            matches!(c,
+                '\u{3040}'..='\u{30FF}'      // hiragana, katakana
+                | '\u{3400}'..='\u{9FFF}'    // CJK ideographs (+ ext. A)
+                | '\u{AC00}'..='\u{D7AF}')   // hangul syllables
+        })
+        .count()
 }
 
 /// llama-server's 500 for a completion it generated but could not parse back.
@@ -337,6 +418,22 @@ mod tests {
         assert_eq!(normalize_lang("mandarin"), "zh");
         assert_eq!(normalize_lang("ru"), "ru");
         assert_eq!(normalize_lang("klingon"), "klingon");
+    }
+
+    #[test]
+    fn language_names_for_prompts() {
+        assert_eq!(language_name("ru"), "Russian");
+        assert_eq!(language_name("zh"), "Chinese");
+        assert_eq!(language_name("ht"), "Haitian creole");
+        assert_eq!(language_name("xx"), "xx");
+    }
+
+    #[test]
+    fn cjk_detection() {
+        assert_eq!(cjk_count("зданиями с стеклянными外墙 и"), 2);
+        assert_eq!(cjk_count("こんにちは 한국"), 7);
+        assert_eq!(cjk_count("Hello, мир"), 0);
+        assert!(writes_cjk("ja") && !writes_cjk("ru"));
     }
 
     #[test]

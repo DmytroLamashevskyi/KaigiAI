@@ -546,6 +546,23 @@ fn render(
             .collect();
         line(format!("| **{src}** | {} |", cells.join(" | ")));
     }
+    // Script drift: translations into a language written without Han / kana /
+    // hangul that still contain them (Qwen2.5-3B drifting into Chinese).
+    let leaks: Vec<String> = targets
+        .iter()
+        .map(|t| {
+            if matches!(t.as_str(), "ja" | "zh" | "ko") {
+                return "—".into();
+            }
+            let outs: Vec<&String> = items
+                .iter()
+                .filter_map(|r| r.translations.get(t).map(|(o, _)| o))
+                .collect();
+            let bad = outs.iter().filter(|o| provider::api::cjk_count(o) > 0).count();
+            format!("{bad}/{}", outs.len())
+        })
+        .collect();
+    line(format!("| *CJK chars in output* | {} |", leaks.join(" | ")));
     line(String::new());
 
     line("### Translation latency (all target languages of one utterance)".into());
