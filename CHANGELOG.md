@@ -6,11 +6,14 @@
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-10-13
+
 ### Добавлено
 - Файл `LICENSE` (MIT) — лицензия теперь определяется GitHub.
 - README: раздел «Установка (Windows)» с пояснением про SmartScreen и раздел
   «Известные ограничения».
-- `docs/ROADMAP.md` — дорожная карта v0.1.4 → v1.0.
+- `docs/ROADMAP.md` — дорожная карта v0.1.4 → v1.0; дизайн v0.2 в `docs/PROJECT.md`
+  §10.16–10.19.
 - `CHANGELOG.md`, шаблоны issue, `THIRD-PARTY-NOTICES` с лицензиями зависимостей.
 - GitHub Actions: проверка сборки и тестов, сборка релизного exe по тегу.
 
@@ -62,7 +65,8 @@
 - Мастер первого запуска, индикатор подготовки серверов, 14 языков интерфейса.
 - Портативный `KaigiAI.exe`, руководство пользователя `docs/USER-GUIDE.md`.
 
-[Unreleased]: https://github.com/DmytroLamashevskyi/KaigiAI/compare/v0.1.3...dev
+[Unreleased]: https://github.com/DmytroLamashevskyi/KaigiAI/compare/v0.1.4...dev
+[0.1.4]: https://github.com/DmytroLamashevskyi/KaigiAI/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/DmytroLamashevskyi/KaigiAI/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/DmytroLamashevskyi/KaigiAI/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/DmytroLamashevskyi/KaigiAI/compare/v0.1.0...v0.1.1
