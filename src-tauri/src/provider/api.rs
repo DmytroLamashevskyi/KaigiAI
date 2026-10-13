@@ -212,11 +212,25 @@ impl SttProvider for ApiProvider {
             .as_deref()
             .map(normalize_lang)
             .unwrap_or(fallback);
+        let text = if self.stt_endpoint == "inference" {
+            join_whisper_cpp_segments(&parsed.text)
+        } else {
+            parsed.text
+        };
         Ok(Transcript {
-            text: parsed.text.trim().to_string(),
+            text: text.trim().to_string(),
             lang,
         })
     }
+}
+
+/// whisper.cpp's server joins its decoder segments with `\n`, and a segment
+/// boundary can fall INSIDE a word ("солн\nечная"). Each segment that starts a
+/// new word already begins with a space, so dropping the newlines restores the
+/// text exactly; with the UI's `pre-wrap` cells they otherwise render as line
+/// breaks mid-word. (Found by the FLEURS benchmark, §10.19.)
+fn join_whisper_cpp_segments(text: &str) -> String {
+    text.replace(['\r', '\n'], "")
 }
 
 /// Trim a provider error body to a short, single-line snippet so a giant HTML/
@@ -257,4 +271,18 @@ fn normalize_lang(raw: &str) -> String {
         other => other,
     };
     code.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn whisper_cpp_segments_rejoin_mid_word() {
+        assert_eq!(
+            join_whisper_cpp_segments("что солн\nечная система\n вращается"),
+            "что солнечная система вращается"
+        );
+        assert_eq!(join_whisper_cpp_segments("в иннинге,\n 70 ранов"), "в иннинге, 70 ранов");
+    }
 }
