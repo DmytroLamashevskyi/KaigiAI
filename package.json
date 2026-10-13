@@ -4,6 +4,7 @@
   "version": "0.1.3",
   "type": "module",
   "description": "KaigiAI - local offline real-time bilingual speech translation and notes",
+  "license": "MIT",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
