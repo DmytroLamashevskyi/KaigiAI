@@ -69,8 +69,30 @@ struct SegmentCancelled {
 struct TranscriptMessage<'a> {
     #[serde(flatten)]
     message: &'a Message,
-    pending_id: u64,
+    /// The §10.8 placeholder this row resolves; `None` on the final update of
+    /// a message that was already shown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pending_id: Option<u64>,
+    /// Target languages whose translation is still in flight (§10.17): the
+    /// first emit (right after STT) lists them all, the final one none.
+    pending_langs: &'a [String],
 }
+
+/// One translation of a message that is already on screen (§10.17), sent as
+/// soon as that target language is done. Carries the recomputed back-compat
+/// fields so the 2-column view needs no logic of its own.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TranslationUpdate<'a> {
+    message_id: &'a str,
+    conversation_id: &'a str,
+    lang: &'a str,
+    text: &'a str,
+    translated_text: String,
+    translated_text_b: Option<String>,
+}
+
+const TRANSLATION_UPDATE_EVENT: &str = "translation-update";
 
 /// Session parameters parsed from the settings blob + conversation — extracted
 /// from `Recorder::start` so the parsing is pure and unit-testable. Path
@@ -580,22 +602,71 @@ async fn process_utterance(
         langs,
         ctx.detect_foreign,
     );
-    // Translate the utterance into every *other* conversation language
-    // (docs/PROJECT.md §10.7). For 2 languages this is a single
-    // translation; with 3+ it fans out, one row per target language
-    // stored in `message_translation`.
-    let mut translations: HashMap<String, String> = HashMap::new();
-    for target in langs {
-        if target == &detected {
-            continue;
+    // Every *other* conversation language gets a translation (§10.7).
+    let targets: Vec<String> = langs.iter().filter(|t| **t != detected).cloned().collect();
+    let mut msg = Message {
+        id: next_id(),
+        conversation_id: ctx.conv_id.clone(),
+        source: "audio".into(),
+        detected_lang: detected.clone(),
+        speaker: diarizer.label(pcm, SAMPLE_RATE),
+        original_text: transcript.text.clone(),
+        translated_text: String::new(),
+        translated_text_b: None,
+        start_ms,
+        end_ms,
+        created_at: now_ms(),
+        processing_ms: None,
+        timings: None,
+        translations: HashMap::new(),
+    };
+    // Progressive display (§10.17): the original goes on screen as soon as
+    // STT is done — what was said no longer waits for N translations. It
+    // resolves the placeholder; `pending_langs` marks the cells "translating…".
+    if let Err(e) = ctx.db.add_message(&msg).await {
+        log::error!("persist message failed: {e}");
+    }
+    emit_transcript(&ctx.app, &msg, Some(pending_id), &targets);
+
+    // All target languages at once (§10.17): llama-server batches concurrent
+    // requests across its slots, so 6 targets took 3.4 s instead of 4.8 s on
+    // the FLEURS benchmark. Each finished language is pushed to the UI
+    // immediately, in whatever order they complete.
+    let done: std::sync::Mutex<HashMap<String, String>> = Default::default();
+    let results = futures_util::future::join_all(targets.iter().map(|target| {
+        let (do_translate, done, msg, detected) = (&do_translate, &done, &msg, &detected);
+        async move {
+            let started = Instant::now();
+            let text = do_translate(detected.clone(), target.clone()).await;
+            let ms = started.elapsed().as_millis() as i64;
+            if !text.is_empty() {
+                // Lock only to update the map and derive the scalar fields —
+                // never across an await.
+                let (translated_text, translated_text_b) = {
+                    let mut map = done.lock().unwrap_or_else(|e| e.into_inner());
+                    map.insert(target.clone(), text.clone());
+                    back_compat_translations(detected, langs, &map)
+                };
+                let _ = ctx.app.emit(
+                    TRANSLATION_UPDATE_EVENT,
+                    TranslationUpdate {
+                        message_id: &msg.id,
+                        conversation_id: &msg.conversation_id,
+                        lang: target,
+                        text: &text,
+                        translated_text,
+                        translated_text_b,
+                    },
+                );
+            }
+            (target.clone(), text, ms)
         }
-        let started = Instant::now();
-        let t = do_translate(detected.clone(), target.clone()).await;
-        timings
-            .translate_ms
-            .insert(target.clone(), started.elapsed().as_millis() as i64);
-        if !t.is_empty() {
-            translations.insert(target.clone(), t);
+    }))
+    .await;
+    for (target, text, ms) in results {
+        timings.translate_ms.insert(target.clone(), ms);
+        if !text.is_empty() {
+            msg.translations.insert(target, text);
         }
     }
     // Back-compat scalar fields for the 2-column view / export:
@@ -604,30 +675,15 @@ async fn process_utterance(
     //    lang_a translation, `translated_text_b` = lang_b translation.
     //  - 3+ languages → `translated_text` = first other language; the
     //    grid UI reads `translations` instead.
-    let (translated, translated_b) = back_compat_translations(&detected, langs, &translations);
-    let speaker = diarizer.label(pcm, SAMPLE_RATE);
-    let now = now_ms();
+    (msg.translated_text, msg.translated_text_b) =
+        back_compat_translations(&detected, langs, &msg.translations);
     // Whole-pipeline latency: from the moment VAD released the
     // segment to now (STT + translation done, about to persist).
     let processing_ms = emitted_at.elapsed().as_millis() as i64;
     timings.total_ms = processing_ms;
     log::info!("latency: {}", latency_line(&timings));
-    let msg = Message {
-        id: next_id(),
-        conversation_id: ctx.conv_id.clone(),
-        source: "audio".into(),
-        detected_lang: detected,
-        speaker,
-        original_text: transcript.text,
-        translated_text: translated,
-        translated_text_b: translated_b,
-        start_ms,
-        end_ms,
-        created_at: now,
-        processing_ms: Some(processing_ms),
-        timings: Some(timings),
-        translations,
-    };
+    msg.processing_ms = Some(processing_ms);
+    msg.timings = Some(timings);
     if let Err(e) = ctx.db.add_message(&msg).await {
         log::error!("persist message failed: {e}");
     }
@@ -647,18 +703,24 @@ async fn process_utterance(
             Err(e) => log::error!("write audio clip failed: {e}"),
         }
     }
-    // Carry `pending_id` alongside the message so the UI replaces the
-    // exact placeholder it raised on `segment-pending` (§10.8).
-    if let Err(e) = ctx.app.emit(
+    // Final state: all translations, timings; nothing pending any more.
+    emit_transcript(&ctx.app, &msg, None, &[]);
+    true
+}
+
+/// Send a message to the UI. `pending_id` names the §10.8 placeholder it
+/// replaces (first emit only); `pending_langs` the translations still running.
+fn emit_transcript(app: &AppHandle, msg: &Message, pending_id: Option<u64>, pending_langs: &[String]) {
+    if let Err(e) = app.emit(
         "transcript-message",
         TranscriptMessage {
-            message: &msg,
+            message: msg,
             pending_id,
+            pending_langs,
         },
     ) {
         log::error!("emit failed: {e}");
     }
-    true
 }
 
 /// One-line latency summary for the log (§10.16), e.g.

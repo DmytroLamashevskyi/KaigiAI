@@ -9,6 +9,8 @@ interface Setters {
   setPending: Dispatch<SetStateAction<PendingSegment[]>>;
   setConversations: Dispatch<SetStateAction<Conversation[]>>;
   setError: Dispatch<SetStateAction<string | null>>;
+  /** Flag a message's translations as in flight / done (§10.17). */
+  markTranslating: (id: string, on: boolean) => void;
   /** Always-current recording flag — placeholder events that arrive after a
    *  stop (queued in the Tauri event loop) are ignored so they can't re-raise a
    *  bar that the stop already cleared. */
@@ -37,13 +39,16 @@ function subscribe(sub: Promise<() => void>, tag: string): () => void {
  *  non-fatal errors, and the §10.8 placeholder lifecycle — wiring each into the
  *  provided state setters. Extracted from AppProvider to keep it readable. */
 export function useRecordingEvents(backend: Backend, s: Setters): void {
-  const { setMessages, setPending, setConversations, setError, recordingRef } = s;
+  const { setMessages, setPending, setConversations, setError, markTranslating, recordingRef } = s;
 
   // Live transcript messages emitted by the Rust recording pipeline.
   useEffect(
     () =>
       subscribe(
-        backend.onTranscriptMessage((m, pendingId) => {
+        backend.onTranscriptMessage((m, pendingId, pendingLangs) => {
+          // §10.17: the first emit (right after STT) carries the original only;
+          // translations follow as `translation-update`, then a final emit.
+          markTranslating(m.id, (pendingLangs?.length ?? 0) > 0);
           setMessages((prev) => {
             const list = prev[m.conversationId] ?? [];
             const i = list.findIndex((x) => x.id === m.id);
@@ -62,7 +67,35 @@ export function useRecordingEvents(backend: Backend, s: Setters): void {
         }),
         "transcript subscription failed"
       ),
-    [backend, setMessages, setPending, setConversations]
+    [backend, setMessages, setPending, setConversations, markTranslating]
+  );
+
+  // One finished translation of a message already on screen (§10.17).
+  useEffect(
+    () =>
+      subscribe(
+        backend.onTranslationUpdate((u) => {
+          setMessages((prev) => {
+            const list = prev[u.conversationId];
+            if (!list) return prev;
+            return {
+              ...prev,
+              [u.conversationId]: list.map((x) =>
+                x.id === u.messageId
+                  ? {
+                      ...x,
+                      translations: { ...(x.translations ?? {}), [u.lang]: u.text },
+                      translatedText: u.translatedText,
+                      translatedTextB: u.translatedTextB ?? null,
+                    }
+                  : x
+              ),
+            };
+          });
+        }),
+        "translation-update subscription failed"
+      ),
+    [backend, setMessages]
   );
 
   // Non-fatal recording errors (STT/translation), shown as a dismissible toast.

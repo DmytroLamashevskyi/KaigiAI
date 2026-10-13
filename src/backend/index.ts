@@ -8,6 +8,21 @@ import { hasTauri } from "../env";
  *  resolves (§10.8); undefined for paths that never raised one. */
 export interface TranscriptPayload extends Message {
   pendingId?: number;
+  /** Target languages still being translated (§10.17): all of them on the
+   *  first emit right after STT, none on the final one. */
+  pendingLangs?: string[];
+}
+
+/** Payload of the `translation-update` event (§10.17): one finished
+ *  translation of a message already on screen, plus the recomputed 2-column
+ *  fields. */
+export interface TranslationUpdatePayload {
+  messageId: string;
+  conversationId: string;
+  lang: string;
+  text: string;
+  translatedText: string;
+  translatedTextB?: string | null;
 }
 
 /** Payload of the `segment-silence` event: speech paused; the UI fills a bar
@@ -88,8 +103,11 @@ export interface Backend {
   // `pendingId` identifies the §10.8 placeholder this message resolves. Returns
   // an unlisten function. No-op outside the desktop shell.
   onTranscriptMessage(
-    cb: (m: Message, pendingId?: number) => void
+    cb: (m: Message, pendingId?: number, pendingLangs?: string[]) => void
   ): Promise<() => void>;
+  // One translation of an on-screen message finished (§10.17). Returns an
+  // unlisten function. No-op outside the desktop shell.
+  onTranslationUpdate(cb: (u: TranslationUpdatePayload) => void): Promise<() => void>;
   // Subscribe to non-fatal recording errors (STT/translation failures) surfaced
   // as a toast. Returns an unlisten function. No-op outside the desktop shell.
   onRecordingError(cb: (message: string) => void): Promise<() => void>;
@@ -144,9 +162,14 @@ function tauriBackend(): Backend {
     listAudioDevices: () => invoke<string[]>("list_audio_devices"),
     openUrl: (url) => invoke<void>("open_url", { url }),
     onTranscriptMessage: (cb) =>
-      listen<TranscriptPayload>("transcript-message", (e) =>
-        cb(e.payload, e.payload.pendingId)
-      ),
+      listen<TranscriptPayload>("transcript-message", (e) => {
+        // The event flattens the message next to its routing fields; keep
+        // those out of the stored message.
+        const { pendingId, pendingLangs, ...message } = e.payload;
+        cb(message, pendingId, pendingLangs);
+      }),
+    onTranslationUpdate: (cb) =>
+      listen<TranslationUpdatePayload>("translation-update", (e) => cb(e.payload)),
     onRecordingError: (cb) =>
       listen<string>("recording-error", (e) => cb(e.payload)),
     onSegmentSilence: (cb) =>
@@ -311,6 +334,7 @@ function localBackend(): Backend {
       return Promise.resolve();
     },
     onTranscriptMessage: () => Promise.resolve(() => {}),
+    onTranslationUpdate: () => Promise.resolve(() => {}),
     onRecordingError: () => Promise.resolve(() => {}),
     onSegmentSilence: () => Promise.resolve(() => {}),
     onSegmentPending: () => Promise.resolve(() => {}),

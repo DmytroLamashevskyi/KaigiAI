@@ -292,6 +292,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setPending,
     setConversations,
     setError,
+    markTranslating,
     recordingRef,
   });
 

@@ -152,6 +152,7 @@ impl Sidecars {
     /// run unlocked, so a slow start can't freeze other server operations. A
     /// concurrent caller for the same (not-yet-ready) server waits on it rather
     /// than spawning a duplicate. `--port` is appended here.
+    #[allow(clippy::too_many_arguments)]
     fn ensure(
         &self,
         which: Which,
