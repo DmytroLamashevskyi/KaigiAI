@@ -58,7 +58,7 @@ const DEFAULT_SETTINGS: Settings = {
   nGpuLayers: 0,
   audioDevice: "",
   audioSource: "mic",
-  silenceMs: 3000,
+  silenceMs: 1000,
   detectForeignLanguages: false,
   exportDir: "",
   saveAudio: false,

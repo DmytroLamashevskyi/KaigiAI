@@ -121,12 +121,14 @@ impl SessionConfig {
         // the user's "silence" setting (0.5–3 s) before the utterance finalizes.
         // Total hangover = grace + bar; the trailing silence is trimmed before
         // STT so the long wait never reaches whisper.
+        // Default bar 1 s (total 2.5 s): the benchmark showed the pause was ~80%
+        // of the 2-language latency at the old 3 s default (§10.19).
         const GRACE_MS: u64 = 1500;
         let frame_ms = crate::audio::vad::FRAME_MS as u64;
         let bar_ms = settings
             .get("silenceMs")
             .and_then(|v| v.as_u64())
-            .unwrap_or(3000)
+            .unwrap_or(1000)
             .clamp(500, 3000);
         let reveal_frames = (GRACE_MS / frame_ms) as usize;
         let vad_cfg = VadConfig {
@@ -1043,6 +1045,9 @@ mod tests {
         assert!(!cfg.save_audio);
         assert_eq!(cfg.source, AudioSource::Mic);
         assert_eq!(cfg.device, None);
+        // Default countdown 1 s after the 1.5 s grace (§10.19).
+        let frame_ms = crate::audio::vad::FRAME_MS as u64;
+        assert_eq!(cfg.vad_cfg.end_frames, ((1500 + 1000) / frame_ms) as usize);
     }
 
     #[test]
