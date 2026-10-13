@@ -128,6 +128,16 @@ pub fn translation_is_local(settings: &serde_json::Value) -> bool {
     is_local(settings, TRANSLATION_MODE)
 }
 
+/// Whether speech recognition runs against a configured API endpoint.
+pub fn stt_is_api(settings: &serde_json::Value) -> bool {
+    is_api(settings, STT_MODE)
+}
+
+/// Whether translation runs against a configured API endpoint.
+pub fn translation_is_api(settings: &serde_json::Value) -> bool {
+    is_api(settings, TRANSLATION_MODE)
+}
+
 /// Build an ApiProvider for a local sidecar server (no API key needed). The STT
 /// path is whisper.cpp's `/inference`; translation ignores it (uses
 /// `/chat/completions`), so the same value is harmless there.

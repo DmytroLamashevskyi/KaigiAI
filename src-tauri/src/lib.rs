@@ -1,10 +1,14 @@
 mod audio;
+/// Benchmark runner for `examples/bench.rs` (docs/PROJECT.md §10.19).
+#[doc(hidden)]
+pub mod bench;
 mod commands;
 mod db;
 mod keychain;
 mod provider;
 mod recording;
-mod sidecar;
+#[doc(hidden)]
+pub mod sidecar;
 
 use tauri::Manager;
 

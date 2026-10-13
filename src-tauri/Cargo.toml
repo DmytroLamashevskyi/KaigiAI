@@ -25,6 +25,8 @@ tauri = { version = "2.11.2" }
 tauri-plugin-log = "2"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
 async-trait = "0.1"
+# join_all for concurrent per-language translation requests (benchmark, §10.17).
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "default-tls"] }
 cpal = "0.15"
 tokio = { version = "1", default-features = false, features = ["sync"] }

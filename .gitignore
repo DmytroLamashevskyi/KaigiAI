@@ -48,3 +48,6 @@ desktop.ini
 
 # Portable single-exe output
 portable/
+
+# Benchmark data and results (FLEURS sample, scripts/fleurs-fetch.mjs)
+bench/

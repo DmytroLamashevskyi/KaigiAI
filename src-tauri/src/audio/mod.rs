@@ -8,4 +8,4 @@ pub mod wav;
 
 pub use capture::{list_input_devices, AudioCapture, AudioSource};
 pub use vad::{VadConfig, VadEvent, SAMPLE_RATE};
-pub use wav::encode_wav_pcm16;
+pub use wav::{decode_wav_mono, encode_wav_pcm16};
